@@ -10,6 +10,13 @@ import {
 } from "lucide-react";
 
 /* ============================================================================
+   API (backend real em Python/FastAPI)
+============================================================================ */
+
+// Endereço do backend rodando localmente (uvicorn). Troque aqui se subir em outra porta/URL.
+const API_BASE = "http://localhost:8000";
+
+/* ============================================================================
    MOCK DATA
 ============================================================================ */
 
@@ -132,24 +139,76 @@ function LoginScreen({ onLogin }) {
   const [mode, setMode] = useState("login"); // login | cadastro | recuperar
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [email, setEmail] = useState("corretor@receivly.com.br");
+  const [email, setEmail] = useState("");
   const [senha, setSenha] = useState("");
   const [nome, setNome] = useState("");
   const [imobiliaria, setImobiliaria] = useState("");
   const [recuperado, setRecuperado] = useState(false);
+  const [erro, setErro] = useState("");
 
-  function handleSubmit(e) {
+  async function handleSubmit(e) {
     e.preventDefault();
+    setErro("");
+
     if (mode === "recuperar") {
+      // O backend ainda não tem endpoint de recuperação de senha — mantém simulado por enquanto.
       setLoading(true);
       setTimeout(() => { setLoading(false); setRecuperado(true); }, 1200);
       return;
     }
+
     setLoading(true);
-    setTimeout(() => {
+    try {
+      let token;
+
+      if (mode === "cadastro") {
+        const resp = await fetch(`${API_BASE}/auth/registrar`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            nome_imobiliaria: imobiliaria,
+            nome_usuario: nome,
+            email,
+            senha,
+          }),
+        });
+        if (!resp.ok) {
+          const erroResp = await resp.json().catch(() => ({}));
+          throw new Error(erroResp.detail || "Não foi possível criar a conta.");
+        }
+        ({ access_token: token } = await resp.json());
+      } else {
+        const form = new URLSearchParams();
+        form.set("username", email);
+        form.set("password", senha);
+        const resp = await fetch(`${API_BASE}/auth/login`, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: form,
+        });
+        if (!resp.ok) {
+          const erroResp = await resp.json().catch(() => ({}));
+          throw new Error(erroResp.detail || "E-mail ou senha incorretos.");
+        }
+        ({ access_token: token } = await resp.json());
+      }
+
+      const respMe = await fetch(`${API_BASE}/auth/me`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!respMe.ok) throw new Error("Login feito, mas não consegui carregar seus dados.");
+      const usuario = await respMe.json();
+
+      onLogin({ nome: usuario.nome, email: usuario.email, token });
+    } catch (err) {
+      setErro(
+        err instanceof TypeError
+          ? "Não consegui falar com o backend. Ele está rodando em " + API_BASE + "?"
+          : err.message
+      );
+    } finally {
       setLoading(false);
-      onLogin({ nome: mode === "cadastro" && nome ? nome : "Ana Cavalcanti", email });
-    }, 1500);
+    }
   }
 
   return (
@@ -206,6 +265,12 @@ function LoginScreen({ onLogin }) {
             </div>
           ) : (
             <form onSubmit={handleSubmit} className="space-y-4">
+              {erro && (
+                <div className="rounded-lg border border-red-200 bg-red-50 px-3.5 py-2.5 flex items-start gap-2">
+                  <AlertTriangle className="h-4 w-4 text-red-500 shrink-0 mt-0.5" />
+                  <p className="text-xs text-red-700">{erro}</p>
+                </div>
+              )}
               {mode === "cadastro" && (
                 <>
                   <div className="relative">
@@ -297,6 +362,7 @@ const NAV_GERAL = [{ id: "dashboard", label: "Visão geral", icon: LayoutGrid }]
 const NAV_PRODUTOS = [
   { id: "juridico", label: "Analisador Jurídico", icon: ShieldCheck, tag: "novo" },
   { id: "whatsapp", label: "IA para WhatsApp", icon: MessageCircle },
+  { id: "anuncios", label: "IA para Anúncios", icon: PenLine, tag: "novo" },
   { id: "videos", label: "Video Tours", icon: Video },
 ];
 const NAV_CONTA = [{ id: "configuracoes", label: "Configurações", icon: Settings }];
@@ -373,6 +439,7 @@ const BREADCRUMBS = {
   dashboard: ["PAINEL", "HOJE", "Visão geral"],
   juridico: ["PAINEL", "PRODUTOS", "Analisador Jurídico"],
   whatsapp: ["PAINEL", "ATENDIMENTO", "IA para WhatsApp"],
+  anuncios: ["PAINEL", "PRODUTOS", "IA para Anúncios"],
   videos: ["PAINEL", "PRODUTOS", "Video Tours"],
   configuracoes: ["PAINEL", "CONTA", "Configurações"],
 };
@@ -598,10 +665,11 @@ function DashboardScreen({ leads, onSelectLead }) {
           <p className="text-sm font-semibold text-gray-900">Produtos</p>
           <button className="text-xs font-medium text-blue-600 hover:text-blue-700">Ver todos</button>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
           {[
             { icon: ShieldCheck, cor: "text-red-600", bg: "bg-red-50", nome: "Analisador Jurídico", desc: "Analisa a matrícula e os documentos dos vendedores e aponta dívidas, processos e outros riscos do imóvel.", stat: "1 risco alto", statCor: "text-red-500", rodape: "Análises ilimitadas" },
             { icon: MessageCircle, cor: "text-blue-600", bg: "bg-blue-50", nome: "IA para WhatsApp", desc: "Conversa, extrai os dados do lead automaticamente e chama o corretor certo na hora certa.", stat: "3 na fila", statCor: "text-amber-500", rodape: "3 números conectados" },
+            { icon: PenLine, cor: "text-amber-600", bg: "bg-amber-50", nome: "IA para Anúncios", desc: "Gera textos prontos para portal imobiliário, Instagram e WhatsApp a partir das características do imóvel.", stat: "novo", statCor: "text-amber-500", rodape: "4 tons de voz disponíveis" },
             { icon: Video, cor: "text-violet-600", bg: "bg-violet-50", nome: "Video Tours", desc: "Transforme fotos do imóvel em vídeos verticais prontos para anúncios e redes sociais.", stat: "2 processando", statCor: "text-blue-500", rodape: "9 vídeos este mês" },
           ].map((p, i) => (
             <div key={i} className="rounded-xl border border-gray-200 bg-white p-5 hover:shadow-md transition-shadow">
@@ -644,50 +712,122 @@ function DashboardScreen({ leads, onSelectLead }) {
    WHATSAPP MODULE
 ============================================================================ */
 
-function FilaLeadCard({ lead, onAssumir }) {
-  const encaminhadoPara = CORRETORES[lead.id % CORRETORES.length];
+function ConversaCard({ conversa, onAssumir }) {
+  const lead = conversa.lead;
+  const s = scoreStyle(lead.score_ia);
   return (
-    <div className="rounded-xl border border-gray-200 bg-white p-4 flex flex-col sm:flex-row sm:items-center gap-4 border-l-4" style={{ borderLeftColor: lead.score < 50 ? "#ef4444" : lead.score < 80 ? "#f59e0b" : "#10b981" }}>
+    <div className="rounded-xl border border-gray-200 bg-white p-4 flex flex-col sm:flex-row sm:items-center gap-4 border-l-4" style={{ borderLeftColor: lead.score_ia < 50 ? "#ef4444" : lead.score_ia < 80 ? "#f59e0b" : "#10b981" }}>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
           <p className="font-medium text-gray-900 text-sm">{lead.nome}</p>
-          <span className="text-[11px] text-gray-400">esperando {lead.timestamp}</span>
+          <span className="text-[11px] text-gray-400">{lead.telefone}</span>
         </div>
-        <p className="text-sm text-gray-600 mt-1">
-          {lead.id === 1 && "Perguntou sobre imposto de ganho de capital na venda de um imóvel herdado — a IA não respondeu e encaminhou."}
-          {lead.id === 2 && "Quer agendar visita no sábado. Perfil já fechado com a IA: apartamento para morar, 2 quartos, com vaga."}
-          {lead.id === 3 && "Perguntou se a casa no Buritis ainda está disponível e pediu para falar direto com um corretor."}
-          {lead.id > 3 && "Conversa qualificada pela IA e aguardando priorização do corretor responsável."}
-        </p>
+        <p className="text-sm text-gray-600 mt-1 truncate">{conversa.ultima_mensagem || "Sem mensagens ainda."}</p>
         <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-[11px] text-gray-500">
-          <span>Orçamento {lead.valor}</span>
-          <span>Região {lead.bairro}</span>
-          <span>Objetivo {lead.id % 2 === 0 ? "Morar" : "Investir"}</span>
+          <span>Orçamento {lead.valor || "não informado"}</span>
+          <span>Região {lead.bairro || "não informado"}</span>
+          <span>Interesse {lead.imovel_interesse || "não informado"}</span>
         </div>
       </div>
       <div className="flex flex-col items-end gap-1.5 shrink-0">
-        <p className="text-[11px] text-gray-400">Encaminhado para <span className="font-medium text-gray-600">{encaminhadoPara}</span></p>
-        <p className="text-[11px] text-emerald-500 flex items-center gap-1"><Check className="h-3 w-3" /> avisado(a) no WhatsApp</p>
-        <button onClick={() => onAssumir(lead)} className="rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium px-4 py-2 mt-1">Assumir conversa →</button>
+        <ScoreBadge score={lead.score_ia} />
+        <button onClick={() => onAssumir(conversa.id)} className="rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium px-4 py-2 mt-1">Abrir conversa →</button>
       </div>
     </div>
   );
 }
 
-function ChatWindow({ lead, onVoltar }) {
-  const [mensagens, setMensagens] = useState(CHAT_HISTORICO[lead.id] || []);
+function ChatWindow({ conversaId, token, onVoltar, onAtualizado }) {
+  const [conversa, setConversa] = useState(null);
+  const [carregando, setCarregando] = useState(true);
+  const [erro, setErro] = useState("");
   const [texto, setTexto] = useState("");
-  const [iaAtiva, setIaAtiva] = useState(true);
-  const [encaminhado, setEncaminhado] = useState(false);
+  const [enviando, setEnviando] = useState(false);
+  const [textoSimulado, setTextoSimulado] = useState("");
+  const [simulando, setSimulando] = useState(false);
   const bottomRef = useRef(null);
 
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [mensagens]);
-
-  function enviar() {
-    if (!texto.trim()) return;
-    setMensagens((m) => [...m, { from: "corretor", text: texto }]);
-    setTexto("");
+  async function carregar() {
+    try {
+      const resp = await fetch(`${API_BASE}/whatsapp/conversas/${conversaId}`, { headers: { Authorization: `Bearer ${token}` } });
+      if (!resp.ok) throw new Error("Não foi possível carregar a conversa.");
+      setConversa(await resp.json());
+    } catch (err) {
+      setErro(err instanceof TypeError ? `Não consegui falar com o backend (${API_BASE}).` : err.message);
+    } finally {
+      setCarregando(false);
+    }
   }
+
+  useEffect(() => { carregar(); }, [conversaId]);
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [conversa]);
+
+  async function enviarComoCorretorAsync() {
+    if (!texto.trim()) return;
+    setEnviando(true);
+    setErro("");
+    try {
+      const resp = await fetch(`${API_BASE}/whatsapp/conversas/${conversaId}/mensagens`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ texto }),
+      });
+      if (!resp.ok) throw new Error("Não foi possível enviar a mensagem.");
+      setConversa(await resp.json());
+      setTexto("");
+      onAtualizado?.();
+    } catch (err) {
+      setErro(err.message);
+    } finally {
+      setEnviando(false);
+    }
+  }
+
+  async function alternarIa() {
+    setErro("");
+    try {
+      const resp = await fetch(`${API_BASE}/whatsapp/conversas/${conversaId}/ia`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ ativa: !conversa.ia_ativa }),
+      });
+      if (!resp.ok) throw new Error("Não foi possível atualizar a conversa.");
+      setConversa(await resp.json());
+      onAtualizado?.();
+    } catch (err) {
+      setErro(err.message);
+    }
+  }
+
+  async function simularMensagemDoLead() {
+    if (!textoSimulado.trim()) return;
+    setSimulando(true);
+    setErro("");
+    try {
+      const resp = await fetch(`${API_BASE}/whatsapp/mensagens`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ telefone: conversa.lead.telefone, nome: conversa.lead.nome, texto: textoSimulado }),
+      });
+      if (!resp.ok) throw new Error("Não foi possível simular a mensagem.");
+      setConversa(await resp.json());
+      setTextoSimulado("");
+      onAtualizado?.();
+    } catch (err) {
+      setErro(err.message);
+    } finally {
+      setSimulando(false);
+    }
+  }
+
+  if (carregando) {
+    return <div className="p-10 flex items-center justify-center text-gray-400 gap-2 text-sm"><Loader2 className="h-4 w-4 animate-spin" /> Carregando conversa...</div>;
+  }
+  if (!conversa) {
+    return <div className="p-10 text-center text-red-500 text-sm">{erro || "Conversa não encontrada."}</div>;
+  }
+
+  const lead = conversa.lead;
 
   return (
     <div className="flex-1 flex flex-col md:flex-row h-[calc(100vh-140px)] rounded-xl border border-gray-200 bg-white overflow-hidden">
@@ -696,42 +836,53 @@ function ChatWindow({ lead, onVoltar }) {
         <div className="px-5 py-3.5 border-b border-gray-100 flex items-center justify-between">
           <div className="flex items-center gap-3 min-w-0">
             <button onClick={onVoltar} className="h-8 w-8 rounded-lg hover:bg-gray-100 flex items-center justify-center text-gray-500 shrink-0"><ArrowLeft className="h-4 w-4" /></button>
-            <div className="h-9 w-9 rounded-full bg-blue-50 text-blue-700 text-xs font-semibold flex items-center justify-center shrink-0">{lead.avatar}</div>
+            <div className="h-9 w-9 rounded-full bg-blue-50 text-blue-700 text-xs font-semibold flex items-center justify-center shrink-0">
+              {lead.nome.split(" ").map((n) => n[0]).slice(0, 2).join("")}
+            </div>
             <div className="min-w-0">
               <p className="font-medium text-gray-900 text-sm truncate">{lead.nome}</p>
               <p className="text-[11px] text-gray-400 truncate">{lead.telefone}</p>
             </div>
           </div>
-          <ScoreBadge score={lead.score} />
+          <ScoreBadge score={lead.score_ia} />
         </div>
 
+        {erro && (
+          <div className="mx-5 mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 flex items-start gap-2">
+            <AlertTriangle className="h-3.5 w-3.5 text-red-500 shrink-0 mt-0.5" />
+            <p className="text-xs text-red-700">{erro}</p>
+          </div>
+        )}
+
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3 bg-[#F7F8FA]">
-          {mensagens.map((m, i) => (
-            <div key={i} className={`flex ${m.from === "lead" ? "justify-start" : "justify-end"}`}>
+          {conversa.mensagens.length === 0 && (
+            <p className="text-xs text-gray-400 text-center mt-6">Nenhuma mensagem ainda — use o simulador de lead, no painel à direita, pra começar a conversa.</p>
+          )}
+          {conversa.mensagens.map((m) => (
+            <div key={m.id} className={`flex ${m.remetente === "lead" ? "justify-start" : "justify-end"}`}>
               <div className={`max-w-[75%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed ${
-                m.from === "lead" ? "bg-white border border-gray-200 text-gray-800 rounded-bl-sm"
-                : m.from === "ia" ? "bg-blue-600 text-white rounded-br-sm"
+                m.remetente === "lead" ? "bg-white border border-gray-200 text-gray-800 rounded-bl-sm"
+                : m.remetente === "ia" ? "bg-blue-600 text-white rounded-br-sm"
                 : "bg-emerald-600 text-white rounded-br-sm"
               }`}>
-                {m.from !== "lead" && (
+                {m.remetente !== "lead" && (
                   <p className="text-[10px] font-medium opacity-75 mb-0.5 flex items-center gap-1">
-                    {m.from === "ia" ? <><Bot className="h-2.5 w-2.5" /> IA Receivly</> : "Você"}
+                    {m.remetente === "ia" ? <><Bot className="h-2.5 w-2.5" /> IA Receivly</> : "Você"}
                   </p>
                 )}
-                {m.text}
+                {m.texto}
               </div>
             </div>
           ))}
-          {iaAtiva && <p className="text-xs text-gray-400 flex items-center gap-1.5"><Bot className="h-3.5 w-3.5" /> IA digitando...</p>}
           <div ref={bottomRef} />
         </div>
 
         <div className="p-3 border-t border-gray-100 flex items-center gap-2">
-          <input value={texto} onChange={(e) => setTexto(e.target.value)} onKeyDown={(e) => e.key === "Enter" && enviar()}
-            placeholder={iaAtiva ? "Assuma a conversa para responder..." : "Digite uma mensagem..."} disabled={iaAtiva}
+          <input value={texto} onChange={(e) => setTexto(e.target.value)} onKeyDown={(e) => e.key === "Enter" && enviarComoCorretorAsync()}
+            placeholder={conversa.ia_ativa ? "Assuma a conversa para responder..." : "Digite uma mensagem..."} disabled={conversa.ia_ativa || enviando}
             className="flex-1 rounded-lg border border-gray-200 bg-gray-50 px-3.5 py-2.5 text-sm outline-none focus:border-blue-400 disabled:opacity-60" />
-          <button onClick={enviar} disabled={iaAtiva} className="h-10 w-10 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white flex items-center justify-center shrink-0">
-            <Send className="h-4 w-4" />
+          <button onClick={enviarComoCorretorAsync} disabled={conversa.ia_ativa || enviando} className="h-10 w-10 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white flex items-center justify-center shrink-0">
+            {enviando ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
           </button>
         </div>
       </div>
@@ -741,40 +892,125 @@ function ChatWindow({ lead, onVoltar }) {
         <div>
           <p className="text-xs font-semibold text-gray-400 mb-2">AI INSIGHTS</p>
           <div className="space-y-2.5">
-            <div className="rounded-lg border border-gray-100 p-3"><p className="text-[11px] text-gray-400">Orçamento</p><p className="text-sm font-medium text-gray-800">{lead.valor}</p></div>
-            <div className="rounded-lg border border-gray-100 p-3"><p className="text-[11px] text-gray-400">Quartos</p><p className="text-sm font-medium text-gray-800">{lead.imovel}</p></div>
-            <div className="rounded-lg border border-gray-100 p-3"><p className="text-[11px] text-gray-400">Localização</p><p className="text-sm font-medium text-gray-800">{lead.bairro}</p></div>
-            <div className="rounded-lg border border-gray-100 p-3"><p className="text-[11px] text-gray-400">Motivação</p><p className="text-sm font-medium text-gray-800">{lead.id % 2 === 0 ? "Investimento" : "Moradia"}</p></div>
+            <div className="rounded-lg border border-gray-100 p-3"><p className="text-[11px] text-gray-400">Orçamento</p><p className="text-sm font-medium text-gray-800">{lead.valor || "ainda não identificado"}</p></div>
+            <div className="rounded-lg border border-gray-100 p-3"><p className="text-[11px] text-gray-400">Interesse</p><p className="text-sm font-medium text-gray-800">{lead.imovel_interesse || "ainda não identificado"}</p></div>
+            <div className="rounded-lg border border-gray-100 p-3"><p className="text-[11px] text-gray-400">Localização</p><p className="text-sm font-medium text-gray-800">{lead.bairro || "ainda não identificado"}</p></div>
           </div>
         </div>
 
-        <button onClick={() => setIaAtiva((v) => !v)}
-          className={`w-full rounded-lg text-sm font-medium py-2.5 transition-colors ${iaAtiva ? "bg-blue-600 hover:bg-blue-700 text-white" : "bg-gray-100 hover:bg-gray-200 text-gray-700"}`}>
-          {iaAtiva ? "Assumir conversa / Desativar IA" : "Devolver conversa para a IA"}
+        <button onClick={alternarIa}
+          className={`w-full rounded-lg text-sm font-medium py-2.5 transition-colors ${conversa.ia_ativa ? "bg-blue-600 hover:bg-blue-700 text-white" : "bg-gray-100 hover:bg-gray-200 text-gray-700"}`}>
+          {conversa.ia_ativa ? "Assumir conversa / Desativar IA" : "Devolver conversa para a IA"}
         </button>
 
-        <button onClick={() => { setEncaminhado(true); setTimeout(() => setEncaminhado(false), 2500); }}
-          className="w-full rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-700 text-sm font-medium py-2.5">
-          Encaminhar ficha do lead
-        </button>
-
-        {encaminhado && (
-          <div className="rounded-lg bg-emerald-50 border border-emerald-200 p-3 flex items-start gap-2">
-            <Check className="h-4 w-4 text-emerald-600 shrink-0 mt-0.5" />
-            <p className="text-xs text-emerald-700">Ficha estruturada enviada para o CRM da imobiliária.</p>
-          </div>
-        )}
+        <div className="rounded-lg border border-dashed border-amber-300 bg-amber-50 p-3.5">
+          <p className="text-[11px] font-semibold text-amber-700 mb-1.5 flex items-center gap-1.5">
+            <AlertTriangle className="h-3.5 w-3.5" /> SIMULADOR DE LEAD (modo de teste)
+          </p>
+          <p className="text-[11px] text-amber-700 mb-2.5">Como o número real do WhatsApp ainda não está conectado, use isso pra simular o que o cliente estaria digitando.</p>
+          <textarea value={textoSimulado} onChange={(e) => setTextoSimulado(e.target.value)} rows={2} placeholder="Ex: Qual o valor do condomínio?"
+            className="w-full rounded-lg border border-amber-200 bg-white px-3 py-2 text-xs outline-none focus:border-amber-400 resize-none mb-2" />
+          <button onClick={simularMensagemDoLead} disabled={simulando || !textoSimulado.trim()}
+            className="w-full flex items-center justify-center gap-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white text-xs font-medium py-2">
+            {simulando ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Simulando...</> : "Simular mensagem do lead"}
+          </button>
+        </div>
       </div>
     </div>
   );
 }
 
-function WhatsAppScreen({ leads }) {
-  const [chatAberto, setChatAberto] = useState(null);
-  const fila = leads.filter((l) => ["Aguardando corretor", "Pronto para visita", "Pediu para falar com alguém"].includes(l.status));
-  const emAndamento = leads.filter((l) => l.status === "IA respondendo");
+function SimularLeadModal({ onClose, onEnviar, enviando }) {
+  const [nome, setNome] = useState("");
+  const [telefone, setTelefone] = useState("");
+  const [texto, setTexto] = useState("Oi, vi um anúncio de vocês e queria saber mais.");
 
-  if (chatAberto) return <div className="p-6"><ChatWindow lead={chatAberto} onVoltar={() => setChatAberto(null)} /></div>;
+  return (
+    <div className="fixed inset-0 z-30 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/30" onClick={enviando ? undefined : onClose} />
+      <div className="relative w-full max-w-md bg-white rounded-xl shadow-2xl p-5">
+        <div className="flex items-center justify-between mb-1">
+          <p className="text-sm font-semibold text-gray-900">Simular novo lead</p>
+          <button onClick={onClose} disabled={enviando} className="h-8 w-8 rounded-lg hover:bg-gray-100 flex items-center justify-center text-gray-400 disabled:opacity-40"><X className="h-4 w-4" /></button>
+        </div>
+        <p className="text-xs text-gray-400 mb-4">Sem número de WhatsApp real conectado ainda — isso simula a primeira mensagem de um cliente novo, pra testar o fluxo completo.</p>
+
+        <label className="text-xs font-medium text-gray-600 mb-1.5 block">Nome do lead</label>
+        <input value={nome} onChange={(e) => setNome(e.target.value)} placeholder="Ex: Luiza Faria"
+          className="w-full rounded-lg border border-gray-200 px-3.5 py-2.5 text-sm outline-none focus:border-blue-400 mb-3" />
+
+        <label className="text-xs font-medium text-gray-600 mb-1.5 block">Telefone (só pra identificar a conversa)</label>
+        <input value={telefone} onChange={(e) => setTelefone(e.target.value)} placeholder="Ex: 31999990000"
+          className="w-full rounded-lg border border-gray-200 px-3.5 py-2.5 text-sm outline-none focus:border-blue-400 mb-3" />
+
+        <label className="text-xs font-medium text-gray-600 mb-1.5 block">Primeira mensagem</label>
+        <textarea value={texto} onChange={(e) => setTexto(e.target.value)} rows={3}
+          className="w-full rounded-lg border border-gray-200 px-3.5 py-2.5 text-sm outline-none focus:border-blue-400 resize-none mb-4" />
+
+        <button onClick={() => onEnviar({ nome, telefone, texto })} disabled={!nome || !telefone || !texto || enviando}
+          className="w-full flex items-center justify-center gap-2 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-medium py-2.5">
+          {enviando ? <><Loader2 className="h-4 w-4 animate-spin" /> Enviando...</> : "Simular mensagem"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function WhatsAppScreen({ token }) {
+  const [conversas, setConversas] = useState([]);
+  const [carregando, setCarregando] = useState(true);
+  const [erro, setErro] = useState("");
+  const [chatAbertoId, setChatAbertoId] = useState(null);
+  const [modalAberto, setModalAberto] = useState(false);
+  const [enviandoSimulacao, setEnviandoSimulacao] = useState(false);
+
+  async function carregarConversas() {
+    setCarregando(true);
+    setErro("");
+    try {
+      const resp = await fetch(`${API_BASE}/whatsapp/conversas`, { headers: { Authorization: `Bearer ${token}` } });
+      if (!resp.ok) throw new Error("Não foi possível carregar as conversas.");
+      setConversas(await resp.json());
+    } catch (err) {
+      setErro(err instanceof TypeError ? `Não consegui falar com o backend (${API_BASE}).` : err.message);
+    } finally {
+      setCarregando(false);
+    }
+  }
+
+  useEffect(() => { carregarConversas(); }, []);
+
+  async function simularNovoLead({ nome, telefone, texto }) {
+    setEnviandoSimulacao(true);
+    setErro("");
+    try {
+      const resp = await fetch(`${API_BASE}/whatsapp/mensagens`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ nome, telefone, texto }),
+      });
+      if (!resp.ok) throw new Error("Não foi possível simular a mensagem.");
+      const conversa = await resp.json();
+      setModalAberto(false);
+      await carregarConversas();
+      setChatAbertoId(conversa.id);
+    } catch (err) {
+      setErro(err.message);
+    } finally {
+      setEnviandoSimulacao(false);
+    }
+  }
+
+  if (chatAbertoId) {
+    return (
+      <div className="p-6">
+        <ChatWindow conversaId={chatAbertoId} token={token} onVoltar={() => { setChatAbertoId(null); carregarConversas(); }} onAtualizado={carregarConversas} />
+      </div>
+    );
+  }
+
+  const fila = conversas.filter((c) => !c.ia_ativa);
+  const emAndamento = conversas.filter((c) => c.ia_ativa);
 
   return (
     <div className="p-6 space-y-6">
@@ -784,62 +1020,78 @@ function WhatsAppScreen({ leads }) {
             <p className="text-sm font-semibold text-gray-900">IA para WhatsApp</p>
             <p className="text-xs text-gray-500 mt-1 leading-relaxed">Conversa naturalmente com o cliente, extrai os dados dele sem formulário e chama o corretor certo assim que perceber que é hora de um humano assumir.</p>
           </div>
-          <div className="flex gap-6 shrink-0">
-            <div><p className="text-lg font-semibold text-gray-900">3</p><p className="text-[11px] text-gray-400">números conectados</p></div>
-            <div><p className="text-lg font-semibold text-gray-900">64%</p><p className="text-[11px] text-gray-400">taxa de qualificação</p></div>
-            <div><p className="text-lg font-semibold text-gray-900">{fila.length}</p><p className="text-[11px] text-gray-400">na fila para corretor</p></div>
+          <div className="flex items-center gap-3 shrink-0">
+            <div className="flex gap-6">
+              <div><p className="text-lg font-semibold text-gray-900">{conversas.length}</p><p className="text-[11px] text-gray-400">conversas totais</p></div>
+              <div><p className="text-lg font-semibold text-gray-900">{fila.length}</p><p className="text-[11px] text-gray-400">aguardando corretor</p></div>
+            </div>
+            <button onClick={() => setModalAberto(true)} className="flex items-center gap-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-xs font-medium px-3.5 py-2.5">
+              <AlertTriangle className="h-3.5 w-3.5" /> Simular novo lead
+            </button>
           </div>
         </div>
+        <p className="text-[11px] text-gray-400 mt-3">Número real do WhatsApp Business ainda não conectado — use o botão acima pra testar o atendimento.</p>
       </div>
 
-      <div>
-        <div className="flex items-center justify-between mb-3">
+      {erro && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 flex items-start gap-2">
+          <AlertTriangle className="h-4 w-4 text-red-500 shrink-0 mt-0.5" />
+          <p className="text-xs text-red-700">{erro}</p>
+        </div>
+      )}
+
+      {carregando ? (
+        <div className="rounded-xl border border-gray-200 bg-white px-5 py-10 flex items-center justify-center text-gray-400 gap-2 text-sm">
+          <Loader2 className="h-4 w-4 animate-spin" /> Carregando conversas...
+        </div>
+      ) : (
+        <>
           <div>
-            <p className="text-sm font-semibold text-gray-900">Fila de leads aguardando atendimento</p>
-            <p className="text-xs text-gray-400">Ordenada por tempo de espera. Assuma a conversa de onde ela parou.</p>
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <p className="text-sm font-semibold text-gray-900">Aguardando corretor</p>
+                <p className="text-xs text-gray-400">A IA já encaminhou ou o corretor assumiu essas conversas.</p>
+              </div>
+            </div>
+            {fila.length === 0 ? (
+              <div className="rounded-xl border border-gray-200 bg-white px-5 py-8 text-center text-sm text-gray-400">Nenhuma conversa aguardando corretor no momento.</div>
+            ) : (
+              <div className="space-y-3">
+                {fila.map((c) => <ConversaCard key={c.id} conversa={c} onAssumir={setChatAbertoId} />)}
+              </div>
+            )}
           </div>
-          <button className="text-xs font-medium text-blue-600 hover:text-blue-700">Ver toda a imobiliária</button>
-        </div>
-        <div className="space-y-3">
-          {fila.map((lead) => <FilaLeadCard key={lead.id} lead={lead} onAssumir={setChatAberto} />)}
-        </div>
-      </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-        <div className="xl:col-span-2 rounded-xl border border-gray-200 bg-white p-5">
-          <p className="text-sm font-semibold text-gray-900 mb-1">Conversas em andamento</p>
-          <p className="text-xs text-gray-400 mb-4">A IA ainda está atendendo, sem necessidade de corretor.</p>
-          <div className="space-y-3">
-            {emAndamento.map((lead) => (
-              <div key={lead.id} onClick={() => setChatAberto(lead)} className="flex items-center justify-between p-2.5 rounded-lg hover:bg-gray-50 cursor-pointer">
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className="h-8 w-8 rounded-full bg-blue-50 text-blue-700 text-xs font-semibold flex items-center justify-center shrink-0">{lead.avatar}</div>
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium text-gray-800">{lead.nome}</p>
-                    <p className="text-xs text-gray-400 truncate">Perguntando condições de financiamento</p>
+          <div className="rounded-xl border border-gray-200 bg-white p-5">
+            <p className="text-sm font-semibold text-gray-900 mb-1">Conversas em andamento</p>
+            <p className="text-xs text-gray-400 mb-4">A IA ainda está atendendo, sem necessidade de corretor.</p>
+            {emAndamento.length === 0 ? (
+              <p className="text-sm text-gray-400 text-center py-6">Nenhuma conversa em andamento.</p>
+            ) : (
+              <div className="space-y-3">
+                {emAndamento.map((c) => (
+                  <div key={c.id} onClick={() => setChatAbertoId(c.id)} className="flex items-center justify-between p-2.5 rounded-lg hover:bg-gray-50 cursor-pointer">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="h-8 w-8 rounded-full bg-blue-50 text-blue-700 text-xs font-semibold flex items-center justify-center shrink-0">
+                        {c.lead.nome.split(" ").map((n) => n[0]).slice(0, 2).join("")}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-gray-800">{c.lead.nome}</p>
+                        <p className="text-xs text-gray-400 truncate">{c.ultima_mensagem || "Sem mensagens ainda"}</p>
+                      </div>
+                    </div>
+                    <span className="text-xs text-blue-600 shrink-0 flex items-center gap-1"><Bot className="h-3 w-3" /> IA respondendo</span>
                   </div>
-                </div>
-                <span className="text-xs text-blue-600 shrink-0 flex items-center gap-1"><Bot className="h-3 w-3" /> IA respondendo</span>
+                ))}
               </div>
-            ))}
+            )}
           </div>
-        </div>
+        </>
+      )}
 
-        <div className="rounded-xl border border-gray-200 bg-white p-5">
-          <p className="text-sm font-semibold text-gray-900 mb-1">Funil de qualificação</p>
-          <p className="text-xs text-gray-400 mb-4">Últimos 30 dias</p>
-          <div className="space-y-3.5">
-            {FUNIL.map((f, i) => (
-              <div key={i}>
-                <div className="flex justify-between text-xs mb-1"><span className="text-gray-600">{f.label}</span><span className="font-medium text-gray-800">{f.valor}</span></div>
-                <div className="h-2 rounded-full bg-gray-100 overflow-hidden">
-                  <div className="h-full bg-blue-600 rounded-full" style={{ width: `${(f.valor / FUNIL[0].valor) * 100}%` }} />
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
+      {modalAberto && (
+        <SimularLeadModal onClose={() => setModalAberto(false)} onEnviar={simularNovoLead} enviando={enviandoSimulacao} />
+      )}
     </div>
   );
 }
@@ -1159,12 +1411,100 @@ function VideosScreen() {
    ANALISADOR JURÍDICO (produto extra visto na referência)
 ============================================================================ */
 
-function JuridicoScreen() {
-  const analises = [
-    { imovel: "Cobertura Savassi", matricula: "45.231", risco: "Alto", cor: "text-red-600", bg: "bg-red-50", detalhe: "Ônus reais e ação em andamento identificados" },
-    { imovel: "Apartamento Pampulha", matricula: "12.884", risco: "Baixo", cor: "text-emerald-600", bg: "bg-emerald-50", detalhe: "Sem pendências relevantes" },
-    { imovel: "Casa Buritis", matricula: "9.104", risco: "Médio", cor: "text-amber-600", bg: "bg-amber-50", detalhe: "IPTU em atraso, situação regularizável" },
-  ];
+function riscoStyle(risco) {
+  if (risco === "Alto") return { cor: "text-red-600", bg: "bg-red-50" };
+  if (risco === "Médio") return { cor: "text-amber-600", bg: "bg-amber-50" };
+  if (risco === "Baixo") return { cor: "text-emerald-600", bg: "bg-emerald-50" };
+  return { cor: "text-gray-500", bg: "bg-gray-100" };
+}
+
+function NovaAnaliseModal({ onClose, onEnviar, enviando }) {
+  const [nomeImovel, setNomeImovel] = useState("");
+  const [arquivo, setArquivo] = useState(null);
+
+  return (
+    <div className="fixed inset-0 z-30 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/30" onClick={enviando ? undefined : onClose} />
+      <div className="relative w-full max-w-md bg-white rounded-xl shadow-2xl p-5">
+        <div className="flex items-center justify-between mb-4">
+          <p className="text-sm font-semibold text-gray-900">Nova análise jurídica</p>
+          <button onClick={onClose} disabled={enviando} className="h-8 w-8 rounded-lg hover:bg-gray-100 flex items-center justify-center text-gray-400 disabled:opacity-40">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <label className="text-xs font-medium text-gray-600 mb-1.5 block">Nome ou referência do imóvel</label>
+        <input value={nomeImovel} onChange={(e) => setNomeImovel(e.target.value)} placeholder="Ex: Cobertura Savassi"
+          className="w-full rounded-lg border border-gray-200 px-3.5 py-2.5 text-sm outline-none focus:border-blue-400 mb-4" />
+
+        <label className="text-xs font-medium text-gray-600 mb-1.5 block">Documento (PDF)</label>
+        <label className="w-full rounded-xl border-2 border-dashed border-gray-300 hover:border-blue-400 hover:bg-blue-50/40 transition-colors py-6 flex flex-col items-center justify-center gap-1.5 text-gray-400 hover:text-blue-500 cursor-pointer">
+          <Upload className="h-5 w-5" />
+          <p className="text-xs font-medium">{arquivo ? arquivo.name : "Clique para escolher o PDF"}</p>
+          <input type="file" accept="application/pdf" className="hidden" onChange={(e) => setArquivo(e.target.files?.[0] || null)} />
+        </label>
+
+        <button
+          onClick={() => onEnviar({ nomeImovel, arquivo })}
+          disabled={!arquivo || enviando}
+          className="w-full mt-5 flex items-center justify-center gap-2 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-medium py-2.5">
+          {enviando ? <><Loader2 className="h-4 w-4 animate-spin" /> Analisando documento...</> : <><FileText className="h-4 w-4" /> Enviar para análise</>}
+        </button>
+        <p className="text-[11px] text-gray-400 mt-3 text-center">Ferramenta de apoio — não substitui a revisão de um advogado.</p>
+      </div>
+    </div>
+  );
+}
+
+function JuridicoScreen({ token }) {
+  const [analises, setAnalises] = useState([]);
+  const [carregando, setCarregando] = useState(true);
+  const [erro, setErro] = useState("");
+  const [modalAberto, setModalAberto] = useState(false);
+  const [enviando, setEnviando] = useState(false);
+
+  async function carregarAnalises() {
+    setCarregando(true);
+    setErro("");
+    try {
+      const resp = await fetch(`${API_BASE}/juridico/`, { headers: { Authorization: `Bearer ${token}` } });
+      if (!resp.ok) throw new Error("Não foi possível carregar as análises.");
+      setAnalises(await resp.json());
+    } catch (err) {
+      setErro(err instanceof TypeError ? `Não consegui falar com o backend (${API_BASE}).` : err.message);
+    } finally {
+      setCarregando(false);
+    }
+  }
+
+  useEffect(() => { carregarAnalises(); }, []);
+
+  async function enviarAnalise({ nomeImovel, arquivo }) {
+    setEnviando(true);
+    setErro("");
+    try {
+      const formData = new FormData();
+      formData.append("arquivo", arquivo);
+      if (nomeImovel) formData.append("nome_imovel", nomeImovel);
+
+      const resp = await fetch(`${API_BASE}/juridico/analisar`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: formData,
+      });
+      if (!resp.ok) {
+        const erroResp = await resp.json().catch(() => ({}));
+        throw new Error(erroResp.detail || "Não foi possível analisar o documento.");
+      }
+      await carregarAnalises();
+      setModalAberto(false);
+    } catch (err) {
+      setErro(err instanceof TypeError ? `Não consegui falar com o backend (${API_BASE}).` : err.message);
+    } finally {
+      setEnviando(false);
+    }
+  }
+
   return (
     <div className="p-6 space-y-6">
       <div className="rounded-xl border border-gray-200 bg-white p-5 flex items-center justify-between flex-wrap gap-4">
@@ -1172,28 +1512,57 @@ function JuridicoScreen() {
           <p className="text-sm font-semibold text-gray-900">Analisador Jurídico</p>
           <p className="text-xs text-gray-500 mt-1 max-w-lg">Analisa a matrícula e os documentos dos vendedores e aponta dívidas, processos e outros riscos do imóvel antes de fechar negócio.</p>
         </div>
-        <button className="flex items-center gap-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-4 py-2.5 shrink-0">
+        <button onClick={() => setModalAberto(true)} className="flex items-center gap-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-4 py-2.5 shrink-0">
           <FileText className="h-4 w-4" /> Nova análise
         </button>
       </div>
 
+      {erro && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 flex items-start gap-2">
+          <AlertTriangle className="h-4 w-4 text-red-500 shrink-0 mt-0.5" />
+          <p className="text-xs text-red-700">{erro}</p>
+        </div>
+      )}
+
       <div className="rounded-xl border border-gray-200 bg-white overflow-hidden">
         <div className="px-5 py-4 border-b border-gray-100"><p className="text-sm font-semibold text-gray-900">Análises recentes</p></div>
-        <div className="divide-y divide-gray-50">
-          {analises.map((a, i) => (
-            <div key={i} className="px-5 py-4 flex items-center justify-between gap-4 flex-wrap hover:bg-gray-50">
-              <div className="flex items-center gap-3">
-                <div className={`h-9 w-9 rounded-lg ${a.bg} ${a.cor} flex items-center justify-center shrink-0`}><AlertTriangle className="h-4 w-4" /></div>
-                <div>
-                  <p className="text-sm font-medium text-gray-800">{a.imovel}</p>
-                  <p className="text-xs text-gray-400">Matrícula {a.matricula} · {a.detalhe}</p>
+
+        {carregando ? (
+          <div className="px-5 py-10 flex items-center justify-center text-gray-400 gap-2 text-sm">
+            <Loader2 className="h-4 w-4 animate-spin" /> Carregando análises...
+          </div>
+        ) : analises.length === 0 ? (
+          <div className="px-5 py-10 text-center text-gray-400 text-sm">Nenhuma análise ainda. Clique em "Nova análise" para enviar o primeiro documento.</div>
+        ) : (
+          <div className="divide-y divide-gray-50">
+            {analises.map((a) => {
+              const s = riscoStyle(a.risco);
+              return (
+                <div key={a.id} className="px-5 py-4 flex items-start justify-between gap-4 flex-wrap hover:bg-gray-50">
+                  <div className="flex items-start gap-3">
+                    <div className={`h-9 w-9 rounded-lg ${s.bg} ${s.cor} flex items-center justify-center shrink-0`}><AlertTriangle className="h-4 w-4" /></div>
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="text-sm font-medium text-gray-800">{a.nome_imovel || a.nome_arquivo}</p>
+                        {!a.gerado_por_ia && (
+                          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-gray-100 text-gray-500">modo demonstração</span>
+                        )}
+                      </div>
+                      <p className="text-xs text-gray-400">{a.nome_arquivo}</p>
+                      <p className="text-xs text-gray-600 mt-1 max-w-lg">{a.resumo}</p>
+                    </div>
+                  </div>
+                  <span className={`text-xs font-semibold px-2.5 py-1 rounded-full shrink-0 ${s.bg} ${s.cor}`}>Risco {a.risco}</span>
                 </div>
-              </div>
-              <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${a.bg} ${a.cor}`}>Risco {a.risco}</span>
-            </div>
-          ))}
-        </div>
+              );
+            })}
+          </div>
+        )}
       </div>
+
+      {modalAberto && (
+        <NovaAnaliseModal onClose={() => setModalAberto(false)} onEnviar={enviarAnalise} enviando={enviando} />
+      )}
     </div>
   );
 }
@@ -1281,6 +1650,7 @@ function ConfiguracoesScreen() {
 export default function ReceivlyApp() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [user, setUser] = useState(null);
+  const [token, setToken] = useState(null);
   const [screen, setScreen] = useState("dashboard");
   const [selectedLead, setSelectedLead] = useState(null);
   const [search, setSearch] = useState("");
@@ -1293,22 +1663,36 @@ export default function ReceivlyApp() {
   const unread = LEADS.filter((l) => l.status !== "Qualificado" && l.status !== "IA respondendo").length;
 
   if (!isAuthenticated) {
-    return <LoginScreen onLogin={(u) => { setUser(u); setIsAuthenticated(true); }} />;
+    return (
+      <LoginScreen
+        onLogin={(u) => {
+          setUser({ nome: u.nome, email: u.email });
+          setToken(u.token);
+          setIsAuthenticated(true);
+        }}
+      />
+    );
+  }
+
+  function logout() {
+    setIsAuthenticated(false);
+    setToken(null);
+    setUser(null);
   }
 
   return (
     <div className="min-h-screen bg-[#F7F8FA] flex">
-      <Sidebar screen={screen} onNavigate={setScreen} unread={unread} user={user} onLogout={() => setIsAuthenticated(false)} />
+      <Sidebar screen={screen} onNavigate={setScreen} unread={unread} user={user} onLogout={logout} />
 
       <div className="flex-1 min-w-0 flex flex-col">
-        <Header screen={screen} user={user} onLogout={() => setIsAuthenticated(false)} search={search} setSearch={setSearch} />
+        <Header screen={screen} user={user} onLogout={logout} search={search} setSearch={setSearch} />
 
         <main className="flex-1 min-w-0">
           {screen === "dashboard" && <DashboardScreen leads={leadsFiltrados} onSelectLead={setSelectedLead} />}
-          {screen === "whatsapp" && <WhatsAppScreen leads={LEADS} />}
+          {screen === "whatsapp" && <WhatsAppScreen token={token} />}
           {screen === "anuncios" && <AnunciosScreen />}
           {screen === "videos" && <VideosScreen />}
-          {screen === "juridico" && <JuridicoScreen />}
+          {screen === "juridico" && <JuridicoScreen token={token} />}
           {screen === "configuracoes" && <ConfiguracoesScreen />}
         </main>
       </div>

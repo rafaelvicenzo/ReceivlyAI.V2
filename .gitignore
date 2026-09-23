@@ -22,3 +22,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+receivly-backend/.envreceivly-backend/.env 
+receivly-backend/.env
+receivly-backend/venv/
