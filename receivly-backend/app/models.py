@@ -12,10 +12,30 @@ class Imobiliaria(Base):
     id = Column(Integer, primary_key=True, index=True)
     nome = Column(String, nullable=False)
     whatsapp_numero = Column(String, nullable=True)
+    marca_dagua_caminho = Column(String, nullable=True)
+    template_laudo_caminho = Column(String, nullable=True)
+    template_laudo_nome = Column(String, nullable=True)
+    usar_marca_dagua = Column(Integer, default=0)
+    ocultar_cabecalho_laudo = Column(Integer, default=0)
+    plano_status = Column(String, default="inativo")  # inativo | ativo | expirado
+    plano_valido_ate = Column(DateTime, nullable=True)
+    asaas_customer_id = Column(String, nullable=True)
+    creditos_avaliacao = Column(Integer, default=0)
     criado_em = Column(DateTime, default=datetime.datetime.utcnow)
 
     usuarios = relationship("Usuario", back_populates="imobiliaria")
     leads = relationship("Lead", back_populates="imobiliaria")
+
+
+class PagamentoPendente(Base):
+    __tablename__ = "pagamentos_pendentes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    imobiliaria_id = Column(Integer, ForeignKey("imobiliarias.id"), nullable=False)
+    asaas_payment_id = Column(String, unique=True, nullable=False, index=True)
+    tipo = Column(String, nullable=False)  # plano | creditos
+    creditos_qtd = Column(Integer, default=0)
+    criado_em = Column(DateTime, default=datetime.datetime.utcnow)
 
 
 class Usuario(Base):
@@ -26,6 +46,12 @@ class Usuario(Base):
     email = Column(String, unique=True, index=True, nullable=False)
     senha_hash = Column(String, nullable=False)
     imobiliaria_id = Column(Integer, ForeignKey("imobiliarias.id"), nullable=False)
+    creci = Column(String, nullable=True)
+    cnai = Column(String, nullable=True)
+    local_laudo = Column(String, nullable=True)
+    titulo_profissional = Column(String, nullable=True)
+    qualificacao_laudo = Column(Text, nullable=True)
+    perfil = Column(String, default="cliente")  # admin | cliente
     criado_em = Column(DateTime, default=datetime.datetime.utcnow)
 
     imobiliaria = relationship("Imobiliaria", back_populates="usuarios")
@@ -41,6 +67,8 @@ class Lead(Base):
     imovel_interesse = Column(String, nullable=True)
     bairro = Column(String, nullable=True)
     valor = Column(String, nullable=True)
+    quartos_interesse = Column(String, nullable=True)
+    vagas_interesse = Column(String, nullable=True)
     score_ia = Column(Integer, default=0)
     canal = Column(String, default="WhatsApp")
     status = Column(String, default="IA respondendo")
@@ -106,6 +134,7 @@ class Avaliacao(Base):
     cidade = Column(String, nullable=True)
     estado = Column(String, nullable=True)
     cep = Column(String, nullable=True)
+    matricula = Column(String, nullable=True)
     tipo = Column(String, default="Apartamento")
     area_imovel = Column(Float, nullable=True)
     area_terreno = Column(Float, nullable=True)
@@ -114,8 +143,17 @@ class Avaliacao(Base):
     vagas = Column(Integer, nullable=True)
     caracteristicas = Column(Text, nullable=True)
     observacoes = Column(Text, nullable=True)
+    padrao_construtivo = Column(String, default="normal")
+    idade_anos = Column(Float, nullable=True)
+    estado_conservacao = Column(Float, nullable=True)  # 0–100 (Heidecke)
+    testada_m = Column(Float, nullable=True)
+    testada_referencia_m = Column(Float, default=10.0)
+    vida_util_anos = Column(Float, default=60.0)
 
     valor_final = Column(Float, nullable=True)
+    latitude = Column(Float, nullable=True)
+    longitude = Column(Float, nullable=True)
+    market_search_count = Column(Integer, default=0)
 
     criado_em = Column(DateTime, default=datetime.datetime.utcnow)
     atualizado_em = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
@@ -139,7 +177,23 @@ class ComparavelAvaliacao(Base):
     valor = Column(Float, nullable=False)
     fonte = Column(String, nullable=True)
     distancia = Column(String, nullable=True)
+    latitude = Column(Float, nullable=True)
+    longitude = Column(Float, nullable=True)
     observacoes = Column(Text, nullable=True)
+    link = Column(String, nullable=True)
+    descricao_anuncio = Column(Text, nullable=True)
+    padrao_construtivo = Column(String, nullable=True)
+    idade_anos = Column(Float, nullable=True)
+    estado_conservacao = Column(Float, nullable=True)
+    testada_m = Column(Float, nullable=True)
+    fator_local = Column(Float, nullable=True)
+    fator_area = Column(Float, nullable=True)
+    fator_depreciacao = Column(Float, nullable=True)
+    fator_padrao = Column(Float, nullable=True)
+    fator_testada = Column(Float, nullable=True)
+    fatores_calculados_por_ia = Column(Integer, default=0)
+    fatores_editados_manualmente = Column(Integer, default=0)
+    justificativas_fatores = Column(Text, nullable=True)
     criado_em = Column(DateTime, default=datetime.datetime.utcnow)
 
     avaliacao = relationship("Avaliacao", back_populates="comparaveis")
@@ -159,3 +213,16 @@ class FotoAvaliacao(Base):
     criado_em = Column(DateTime, default=datetime.datetime.utcnow)
 
     avaliacao = relationship("Avaliacao", back_populates="fotos")
+
+
+class FotoTour(Base):
+    __tablename__ = "foto_tours"
+
+    id = Column(Integer, primary_key=True, index=True)
+    imobiliaria_id = Column(Integer, ForeignKey("imobiliarias.id"), nullable=False)
+    estilo = Column(String, nullable=False)
+    nome_original = Column(String, nullable=True)
+    caminho_relativo = Column(String, nullable=False)
+    gerado_por_ia = Column(Integer, default=0)
+    prompt_usado = Column(Text, nullable=True)
+    criado_em = Column(DateTime, default=datetime.datetime.utcnow)

@@ -1,8 +1,14 @@
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app import models, schemas, auth, calculo_avaliacao, fotos_avaliacao, pesquisa_mercado
+import json
+
+from app import models, schemas, auth, calculo_avaliacao, fotos_avaliacao, pesquisa_mercado, localizacao, fatores_ia, branding_avaliacao, geracao_laudo, usage_limits
+from app.comparaveis_demo import pesquisar_comparaveis_demo
+from app.config import settings
+from app.perfil import eh_admin
 
 router = APIRouter(prefix="/avaliacoes", tags=["Avaliação Imobiliária"])
 
@@ -25,7 +31,51 @@ def _foto_response(foto: models.FotoAvaliacao) -> schemas.FotoResponse:
     )
 
 
-def _avaliacao_detalhe(avaliacao: models.Avaliacao) -> schemas.AvaliacaoDetalheResponse:
+def _comparavel_response(comparavel: models.ComparavelAvaliacao) -> schemas.ComparavelResponse:
+    justificativas = None
+    if comparavel.justificativas_fatores:
+        try:
+            justificativas = json.loads(comparavel.justificativas_fatores)
+        except json.JSONDecodeError:
+            justificativas = None
+
+    return schemas.ComparavelResponse(
+        id=comparavel.id,
+        avaliacao_id=comparavel.avaliacao_id,
+        endereco=comparavel.endereco,
+        bairro=comparavel.bairro,
+        cidade=comparavel.cidade,
+        area=comparavel.area,
+        quartos=comparavel.quartos,
+        banheiros=comparavel.banheiros,
+        vagas=comparavel.vagas,
+        valor=comparavel.valor,
+        fonte=comparavel.fonte,
+        distancia=comparavel.distancia,
+        latitude=comparavel.latitude,
+        longitude=comparavel.longitude,
+        observacoes=comparavel.observacoes,
+        link=comparavel.link,
+        descricao_anuncio=comparavel.descricao_anuncio,
+        padrao_construtivo=comparavel.padrao_construtivo,
+        idade_anos=comparavel.idade_anos,
+        estado_conservacao=comparavel.estado_conservacao,
+        testada_m=comparavel.testada_m,
+        fator_local=comparavel.fator_local,
+        fator_area=comparavel.fator_area,
+        fator_depreciacao=comparavel.fator_depreciacao,
+        fator_padrao=comparavel.fator_padrao,
+        fator_testada=comparavel.fator_testada,
+        fatores_calculados_por_ia=bool(comparavel.fatores_calculados_por_ia),
+        fatores_editados_manualmente=bool(comparavel.fatores_editados_manualmente),
+        justificativas_fatores=justificativas,
+    )
+
+
+def _avaliacao_detalhe(
+    avaliacao: models.Avaliacao,
+    db: Session,
+) -> schemas.AvaliacaoDetalheResponse:
     return schemas.AvaliacaoDetalheResponse(
         id=avaliacao.id,
         status=avaliacao.status,
@@ -36,6 +86,7 @@ def _avaliacao_detalhe(avaliacao: models.Avaliacao) -> schemas.AvaliacaoDetalheR
         cidade=avaliacao.cidade,
         estado=avaliacao.estado,
         cep=avaliacao.cep,
+        matricula=avaliacao.matricula,
         tipo=avaliacao.tipo,
         area_imovel=avaliacao.area_imovel,
         area_terreno=avaliacao.area_terreno,
@@ -44,9 +95,18 @@ def _avaliacao_detalhe(avaliacao: models.Avaliacao) -> schemas.AvaliacaoDetalheR
         vagas=avaliacao.vagas,
         caracteristicas=avaliacao.caracteristicas,
         observacoes=avaliacao.observacoes,
+        padrao_construtivo=avaliacao.padrao_construtivo or "normal",
+        idade_anos=avaliacao.idade_anos,
+        estado_conservacao=avaliacao.estado_conservacao,
+        testada_m=avaliacao.testada_m,
+        testada_referencia_m=avaliacao.testada_referencia_m or 10.0,
+        vida_util_anos=avaliacao.vida_util_anos or 60.0,
         valor_final=avaliacao.valor_final,
-        comparaveis=[schemas.ComparavelResponse.model_validate(c) for c in avaliacao.comparaveis],
+        latitude=avaliacao.latitude,
+        longitude=avaliacao.longitude,
+        comparaveis=[_comparavel_response(c) for c in avaliacao.comparaveis],
         fotos=[_foto_response(f) for f in avaliacao.fotos],
+        usage=usage_limits.build_usage_snapshot(db, avaliacao.imobiliaria_id, avaliacao),
         criado_em=avaliacao.criado_em,
         atualizado_em=avaliacao.atualizado_em,
     )
@@ -63,6 +123,97 @@ def _buscar_avaliacao(avaliacao_id: int, usuario_atual: models.Usuario, db: Sess
     return avaliacao
 
 
+# ---------- Branding (logo no laudo e template) ----------
+
+@router.get("/branding", response_model=schemas.BrandingResponse)
+def obter_branding(
+    usuario_atual: models.Usuario = Depends(auth.obter_usuario_atual),
+    db: Session = Depends(get_db),
+):
+    imob = db.query(models.Imobiliaria).filter(models.Imobiliaria.id == usuario_atual.imobiliaria_id).first()
+    return branding_avaliacao.branding_response(imob)
+
+
+@router.patch("/branding", response_model=schemas.BrandingResponse)
+def atualizar_branding(
+    dados: schemas.BrandingConfigUpdate,
+    usuario_atual: models.Usuario = Depends(auth.obter_usuario_atual),
+    db: Session = Depends(get_db),
+):
+    imob = db.query(models.Imobiliaria).filter(models.Imobiliaria.id == usuario_atual.imobiliaria_id).first()
+    if dados.exibir_logo_laudo is not None:
+        imob.usar_marca_dagua = 1 if dados.exibir_logo_laudo else 0
+    if dados.ocultar_cabecalho_laudo is not None:
+        imob.ocultar_cabecalho_laudo = 1 if dados.ocultar_cabecalho_laudo else 0
+    db.commit()
+    db.refresh(imob)
+    return branding_avaliacao.branding_response(imob)
+
+
+@router.post("/branding/logo-laudo", response_model=schemas.BrandingResponse)
+async def enviar_logo_laudo(
+    arquivo: UploadFile = File(...),
+    usuario_atual: models.Usuario = Depends(auth.obter_usuario_atual),
+    db: Session = Depends(get_db),
+):
+    imob = db.query(models.Imobiliaria).filter(models.Imobiliaria.id == usuario_atual.imobiliaria_id).first()
+    conteudo = await arquivo.read()
+    try:
+        imob.marca_dagua_caminho = branding_avaliacao.salvar_logo_laudo(imob.id, arquivo.filename, conteudo)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    db.commit()
+    db.refresh(imob)
+    return branding_avaliacao.branding_response(imob)
+
+
+@router.post("/branding/template-laudo", response_model=schemas.BrandingResponse)
+async def enviar_template_laudo(
+    arquivo: UploadFile = File(...),
+    usuario_atual: models.Usuario = Depends(auth.obter_usuario_atual),
+    db: Session = Depends(get_db),
+):
+    imob = db.query(models.Imobiliaria).filter(models.Imobiliaria.id == usuario_atual.imobiliaria_id).first()
+    conteudo = await arquivo.read()
+    try:
+        caminho, nome = branding_avaliacao.salvar_template_laudo(imob.id, arquivo.filename, conteudo)
+        imob.template_laudo_caminho = caminho
+        imob.template_laudo_nome = nome
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    db.commit()
+    db.refresh(imob)
+    return branding_avaliacao.branding_response(imob)
+
+
+# ---------- Localização (CEP, geocodificação, mapa) ----------
+
+@router.get("/cep/{cep}", response_model=schemas.CepConsultaResponse)
+async def consultar_cep(
+    cep: str,
+    usuario_atual: models.Usuario = Depends(auth.obter_usuario_atual),
+):
+    try:
+        return await localizacao.consultar_cep(cep)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception:
+        raise HTTPException(status_code=502, detail="Não foi possível consultar o CEP no momento.")
+
+
+@router.get("/geocodificar", response_model=schemas.GeocodificacaoResponse)
+async def geocodificar_endereco(
+    endereco: str | None = Query(None),
+    numero: str | None = Query(None),
+    bairro: str | None = Query(None),
+    cidade: str | None = Query(None),
+    estado: str | None = Query(None),
+    cep: str | None = Query(None),
+    usuario_atual: models.Usuario = Depends(auth.obter_usuario_atual),
+):
+    return await localizacao.geocodificar(endereco, numero, bairro, cidade, estado, cep)
+
+
 # ---------- Avaliação (CRUD básico) ----------
 
 @router.post("/", response_model=schemas.AvaliacaoDetalheResponse)
@@ -71,11 +222,12 @@ def criar_avaliacao(
     usuario_atual: models.Usuario = Depends(auth.obter_usuario_atual),
     db: Session = Depends(get_db),
 ):
+    usage_limits.assert_can_create_appraisal(db, usuario_atual.imobiliaria_id, usuario_atual)
     avaliacao = models.Avaliacao(imobiliaria_id=usuario_atual.imobiliaria_id, **dados.model_dump())
     db.add(avaliacao)
     db.commit()
     db.refresh(avaliacao)
-    return _avaliacao_detalhe(avaliacao)
+    return _avaliacao_detalhe(avaliacao, db)
 
 
 @router.get("/", response_model=list[schemas.AvaliacaoResumoResponse])
@@ -98,7 +250,7 @@ def obter_avaliacao(
     usuario_atual: models.Usuario = Depends(auth.obter_usuario_atual),
     db: Session = Depends(get_db),
 ):
-    return _avaliacao_detalhe(_buscar_avaliacao(avaliacao_id, usuario_atual, db))
+    return _avaliacao_detalhe(_buscar_avaliacao(avaliacao_id, usuario_atual, db), db)
 
 
 @router.patch("/{avaliacao_id}", response_model=schemas.AvaliacaoDetalheResponse)
@@ -113,7 +265,7 @@ def atualizar_avaliacao(
         setattr(avaliacao, campo, valor)
     db.commit()
     db.refresh(avaliacao)
-    return _avaliacao_detalhe(avaliacao)
+    return _avaliacao_detalhe(avaliacao, db)
 
 
 @router.delete("/{avaliacao_id}")
@@ -142,13 +294,38 @@ def concluir_avaliacao(
     avaliacao.valor_final = dados.valor_final
     db.commit()
     db.refresh(avaliacao)
-    return _avaliacao_detalhe(avaliacao)
+    return _avaliacao_detalhe(avaliacao, db)
 
 
 # ---------- Comparáveis ----------
 
+async def _geocodificar_comparavel(
+    comparavel: models.ComparavelAvaliacao,
+    avaliacao: models.Avaliacao,
+) -> None:
+    if comparavel.latitude is not None and comparavel.longitude is not None:
+        return
+    geo = await localizacao.geocodificar(
+        comparavel.endereco,
+        None,
+        comparavel.bairro or avaliacao.bairro,
+        comparavel.cidade or avaliacao.cidade,
+        avaliacao.estado,
+        avaliacao.cep,
+    )
+    if geo.latitude is None or geo.longitude is None:
+        return
+    comparavel.latitude = geo.latitude
+    comparavel.longitude = geo.longitude
+    if avaliacao.latitude and avaliacao.longitude and not comparavel.distancia:
+        km = localizacao.distancia_km(
+            avaliacao.latitude, avaliacao.longitude, geo.latitude, geo.longitude
+        )
+        comparavel.distancia = f"{km:.1f}".replace(".", ",")
+
+
 @router.post("/{avaliacao_id}/comparaveis", response_model=schemas.ComparavelResponse)
-def adicionar_comparavel(
+async def adicionar_comparavel(
     avaliacao_id: int,
     dados: schemas.ComparavelCreate,
     usuario_atual: models.Usuario = Depends(auth.obter_usuario_atual),
@@ -156,10 +333,108 @@ def adicionar_comparavel(
 ):
     avaliacao = _buscar_avaliacao(avaliacao_id, usuario_atual, db)
     comparavel = models.ComparavelAvaliacao(avaliacao_id=avaliacao.id, **dados.model_dump())
+    await _geocodificar_comparavel(comparavel, avaliacao)
     db.add(comparavel)
     db.commit()
     db.refresh(comparavel)
-    return schemas.ComparavelResponse.model_validate(comparavel)
+    return _comparavel_response(comparavel)
+
+
+@router.post("/{avaliacao_id}/comparaveis/geocodificar", response_model=list[schemas.ComparavelResponse])
+async def geocodificar_comparaveis(
+    avaliacao_id: int,
+    usuario_atual: models.Usuario = Depends(auth.obter_usuario_atual),
+    db: Session = Depends(get_db),
+):
+    """Geocodifica comparáveis sem coordenadas (endereço → lat/lng no mapa)."""
+    avaliacao = _buscar_avaliacao(avaliacao_id, usuario_atual, db)
+    for comparavel in avaliacao.comparaveis:
+        await _geocodificar_comparavel(comparavel, avaliacao)
+    db.commit()
+    return [_comparavel_response(c) for c in avaliacao.comparaveis]
+
+
+@router.patch("/{avaliacao_id}/comparaveis/{comparavel_id}", response_model=schemas.ComparavelResponse)
+def atualizar_comparavel(
+    avaliacao_id: int,
+    comparavel_id: int,
+    dados: schemas.ComparavelUpdate,
+    usuario_atual: models.Usuario = Depends(auth.obter_usuario_atual),
+    db: Session = Depends(get_db),
+):
+    avaliacao = _buscar_avaliacao(avaliacao_id, usuario_atual, db)
+    comparavel = next((c for c in avaliacao.comparaveis if c.id == comparavel_id), None)
+    if not comparavel:
+        raise HTTPException(status_code=404, detail="Comparável não encontrado.")
+
+    alteracoes = dados.model_dump(exclude_unset=True)
+    if not alteracoes:
+        return _comparavel_response(comparavel)
+
+    recalcular_fatores = any(k in alteracoes for k in ("area", "valor", "padrao_construtivo", "idade_anos", "estado_conservacao", "testada_m"))
+    for campo, valor in alteracoes.items():
+        setattr(comparavel, campo, valor)
+
+    if recalcular_fatores:
+        comparavel.fator_local = None
+        comparavel.fator_area = None
+        comparavel.fator_depreciacao = None
+        comparavel.fator_padrao = None
+        comparavel.fator_testada = None
+        comparavel.fatores_calculados_por_ia = 0
+        comparavel.fatores_editados_manualmente = 0
+        comparavel.justificativas_fatores = None
+
+    db.commit()
+    db.refresh(comparavel)
+    return _comparavel_response(comparavel)
+
+
+@router.patch("/{avaliacao_id}/comparaveis/{comparavel_id}/coordenadas", response_model=schemas.ComparavelResponse)
+def atualizar_coordenadas_comparavel(
+    avaliacao_id: int,
+    comparavel_id: int,
+    dados: schemas.ComparavelCoordenadasUpdate,
+    usuario_atual: models.Usuario = Depends(auth.obter_usuario_atual),
+    db: Session = Depends(get_db),
+):
+    avaliacao = _buscar_avaliacao(avaliacao_id, usuario_atual, db)
+    comparavel = next((c for c in avaliacao.comparaveis if c.id == comparavel_id), None)
+    if not comparavel:
+        raise HTTPException(status_code=404, detail="Comparável não encontrado.")
+    comparavel.latitude = dados.latitude
+    comparavel.longitude = dados.longitude
+    if avaliacao.latitude and avaliacao.longitude:
+        km = localizacao.distancia_km(
+            avaliacao.latitude, avaliacao.longitude, dados.latitude, dados.longitude
+        )
+        comparavel.distancia = f"{km:.1f}".replace(".", ",")
+    db.commit()
+    db.refresh(comparavel)
+    return _comparavel_response(comparavel)
+
+
+@router.patch("/{avaliacao_id}/comparaveis/{comparavel_id}/fatores", response_model=schemas.ComparavelResponse)
+def atualizar_fatores_comparavel(
+    avaliacao_id: int,
+    comparavel_id: int,
+    dados: schemas.FatoresComparavelUpdate,
+    usuario_atual: models.Usuario = Depends(auth.obter_usuario_atual),
+    db: Session = Depends(get_db),
+):
+    avaliacao = _buscar_avaliacao(avaliacao_id, usuario_atual, db)
+    comparavel = next((c for c in avaliacao.comparaveis if c.id == comparavel_id), None)
+    if not comparavel:
+        raise HTTPException(status_code=404, detail="Comparável não encontrado.")
+
+    for campo, valor in dados.model_dump().items():
+        setattr(comparavel, campo, max(0.75, min(1.25, valor)))
+
+    comparavel.fatores_editados_manualmente = 1
+    comparavel.fatores_calculados_por_ia = 1
+    db.commit()
+    db.refresh(comparavel)
+    return _comparavel_response(comparavel)
 
 
 @router.delete("/{avaliacao_id}/comparaveis/{comparavel_id}")
@@ -249,18 +524,67 @@ def remover_foto(
 
 # ---------- Pesquisa de mercado (busca real via OpenAI web_search) ----------
 
-@router.post("/pesquisar-mercado", response_model=list[schemas.PesquisaResultadoItem])
+@router.post("/{avaliacao_id}/pesquisar-mercado", response_model=schemas.MarketSearchResponse)
 def pesquisar_mercado(
+    avaliacao_id: int,
     criterios: schemas.PesquisaComparaveisRequest,
     usuario_atual: models.Usuario = Depends(auth.obter_usuario_atual),
+    db: Session = Depends(get_db),
 ):
     """Busca imóveis comparáveis de verdade na web (via IA). Não salva nada —
     devolve a lista pro corretor escolher quais quer adicionar à avaliação,
     usando o endpoint /comparaveis normal em seguida."""
-    return pesquisa_mercado.pesquisar_comparaveis(criterios)
+    avaliacao = _buscar_avaliacao(avaliacao_id, usuario_atual, db)
+    criterios = pesquisa_mercado.enriquecer_criterios(avaliacao, criterios)
+    # Sempre busca o máximo permitido (evita cache antigo do front pedindo só 3)
+    criterios.quantidade = settings.fair_use_max_comparables_per_search
+
+    usar_demo = (
+        settings.comparaveis_modo_demo
+        or (settings.comparaveis_demo_admin and eh_admin(usuario_atual))
+    )
+
+    if usar_demo:
+        resultados, meta = pesquisar_comparaveis_demo(
+            criterios,
+            lat_ref=avaliacao.latitude,
+            lng_ref=avaliacao.longitude,
+        )
+    else:
+        usage_limits.assert_can_run_market_search(avaliacao)
+        try:
+            resultados, meta = pesquisa_mercado.pesquisar_comparaveis(criterios)
+        except RuntimeError as exc:
+            msg = str(exc)
+            if any(x in msg for x in ("429", "Cota", "quota", "busca na web", "Grounding", "GEMINI_API_KEY")):
+                raise HTTPException(status_code=429, detail=msg) from exc
+            raise HTTPException(status_code=502, detail=msg) from exc
+
+        if meta.provedor != "fallback":
+            usage_limits.increment_market_search_count(avaliacao, db)
+
+    return schemas.MarketSearchResponse(
+        results=resultados,
+        usage=usage_limits.build_usage_snapshot(db, usuario_atual.imobiliaria_id, avaliacao),
+        meta=schemas.MarketSearchMeta(**meta.__dict__),
+    )
 
 
 # ---------- Cálculos e resultado ----------
+
+@router.post("/{avaliacao_id}/calcular-fatores-ia", response_model=list[schemas.ComparavelFatoresResponse])
+def calcular_fatores_ia(
+    avaliacao_id: int,
+    usuario_atual: models.Usuario = Depends(auth.obter_usuario_atual),
+    db: Session = Depends(get_db),
+):
+    avaliacao = _buscar_avaliacao(avaliacao_id, usuario_atual, db)
+    usage_limits.assert_can_calculate_factors(avaliacao)
+    try:
+        return fatores_ia.calcular_e_salvar_fatores(avaliacao, db)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Erro ao calcular fatores com IA: {exc}") from exc
+
 
 @router.get("/{avaliacao_id}/resultado", response_model=schemas.ResultadoAvaliacaoResponse)
 def obter_resultado(
@@ -270,3 +594,46 @@ def obter_resultado(
 ):
     avaliacao = _buscar_avaliacao(avaliacao_id, usuario_atual, db)
     return calculo_avaliacao.calcular_resultado(avaliacao)
+
+
+@router.post("/{avaliacao_id}/exportar-laudo-pdf")
+def exportar_laudo_pdf(
+    avaliacao_id: int,
+    dados: schemas.LaudoExportRequest,
+    usuario_atual: models.Usuario = Depends(auth.obter_usuario_atual),
+    db: Session = Depends(get_db),
+):
+    avaliacao = _buscar_avaliacao(avaliacao_id, usuario_atual, db)
+    imob = db.query(models.Imobiliaria).filter(models.Imobiliaria.id == usuario_atual.imobiliaria_id).first()
+    try:
+        conteudo, nome_arquivo = geracao_laudo.gerar_laudo_pdf(avaliacao, imob, dados)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Erro ao gerar laudo PDF: {exc}") from exc
+    return Response(
+        content=conteudo,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{nome_arquivo}"'},
+    )
+
+
+@router.post("/{avaliacao_id}/exportar-laudo-docx")
+def exportar_laudo_docx(
+    avaliacao_id: int,
+    dados: schemas.LaudoExportRequest,
+    usuario_atual: models.Usuario = Depends(auth.obter_usuario_atual),
+    db: Session = Depends(get_db),
+):
+    """Gera Word preenchendo o template (.docx) da imobiliária ou anexando o laudo completo."""
+    avaliacao = _buscar_avaliacao(avaliacao_id, usuario_atual, db)
+    imob = db.query(models.Imobiliaria).filter(models.Imobiliaria.id == usuario_atual.imobiliaria_id).first()
+    try:
+        conteudo, nome_arquivo = geracao_laudo.gerar_laudo_docx(avaliacao, imob, dados)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Erro ao gerar laudo Word: {exc}") from exc
+    return Response(
+        content=conteudo,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{nome_arquivo}"'},
+    )

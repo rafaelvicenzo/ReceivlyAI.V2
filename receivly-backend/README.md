@@ -2,13 +2,13 @@
 
 Backend em Python/FastAPI do Receivly. Substitui os dados mockados do front-end
 por autenticação real, banco de dados e uma chamada de IA de verdade (gerador
-de anúncios via Claude).
+de anúncios via Groq).
 
 ## O que já está pronto
 
 - Cadastro e login de imobiliária/corretor com senha criptografada (bcrypt) e token JWT.
 - CRUD de leads, isolado por imobiliária (cada conta só vê os próprios leads).
-- Gerador de anúncios chamando a API da Anthropic de verdade (`/anuncios/gerar`).
+- Gerador de anúncios chamando a API da Groq (`/anuncios/gerar`), com fallback local.
 - Banco SQLite pronto pra rodar local, sem precisar instalar Postgres agora.
   Quando for pra produção, basta trocar `DATABASE_URL` no `.env` pela URL do
   Postgres (ex: de um projeto no Supabase) — o resto do código não muda.
@@ -32,7 +32,7 @@ de anúncios via Claude).
    pip install -r requirements.txt
    ```
 
-2. Copie o `.env.example` para `.env` e preencha sua chave da Anthropic:
+2. Copie o `.env.example` para `.env` e preencha suas chaves (Groq e OpenAI):
 
    ```bash
    copy .env.example .env        # Windows
@@ -59,7 +59,7 @@ de anúncios via Claude).
 | GET    | `/leads/`            | Lista os leads da imobiliária logada          |
 | POST   | `/leads/`            | Cria um lead                                   |
 | PATCH  | `/leads/{id}`        | Atualiza um lead                               |
-| POST   | `/anuncios/gerar`    | Gera os 3 textos de anúncio via IA (Claude)   |
+| POST   | `/anuncios/gerar`    | Gera os 3 textos de anúncio via IA (Groq)    |
 
 Todas as rotas exceto `/auth/registrar` e `/auth/login` exigem o header:
 `Authorization: Bearer <token>`.

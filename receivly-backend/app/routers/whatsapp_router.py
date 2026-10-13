@@ -11,7 +11,9 @@ def _dados_extraidos_do_lead(lead: models.Lead) -> ia_whatsapp.DadosExtraidos:
     return ia_whatsapp.DadosExtraidos(
         orcamento=lead.valor,
         bairro=lead.bairro,
-        quartos=lead.imovel_interesse,
+        tipo_imovel=lead.imovel_interesse,
+        quartos=lead.quartos_interesse,
+        vagas=lead.vagas_interesse,
         motivacao=None,
     )
 
@@ -21,8 +23,24 @@ def _aplicar_dados_extraidos(lead: models.Lead, dados: ia_whatsapp.DadosExtraido
         lead.valor = dados.orcamento
     if dados.bairro:
         lead.bairro = dados.bairro
+    if dados.tipo_imovel:
+        lead.imovel_interesse = dados.tipo_imovel
     if dados.quartos:
-        lead.imovel_interesse = dados.quartos
+        lead.quartos_interesse = dados.quartos
+    if dados.vagas:
+        lead.vagas_interesse = dados.vagas
+    score = 15
+    if lead.valor:
+        score += 25
+    if lead.bairro:
+        score += 20
+    if lead.imovel_interesse:
+        score += 15
+    if lead.quartos_interesse:
+        score += 15
+    if lead.vagas_interesse:
+        score += 10
+    lead.score_ia = min(100, score)
 
 
 def processar_mensagem_recebida(

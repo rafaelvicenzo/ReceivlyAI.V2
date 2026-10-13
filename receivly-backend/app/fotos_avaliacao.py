@@ -1,8 +1,5 @@
 """
 Compressão/otimização real das fotos da avaliação, feita no servidor com Pillow.
-Isso complementa a otimização que já acontece no navegador (Canvas API) — aqui
-garantimos que o arquivo salvo no disco também fica no tamanho certo, mesmo que
-o front-end mude ou que a foto venha de outro lugar (ex: app mobile no futuro).
 """
 
 import io
@@ -19,14 +16,11 @@ QUALIDADE_JPEG = 72
 
 
 def salvar_foto_otimizada(avaliacao_id: int, nome_original: str, conteudo: bytes) -> dict:
-    """Recebe os bytes originais da foto, comprime e salva em disco.
-    Retorna um dicionário com os metadados para gravar no banco."""
-
     pasta = UPLOADS_DIR / str(avaliacao_id)
     pasta.mkdir(parents=True, exist_ok=True)
 
     imagem = Image.open(io.BytesIO(conteudo))
-    imagem = imagem.convert("RGB")  # necessário pra salvar como JPEG mesmo se vier PNG/WEBP
+    imagem = imagem.convert("RGB")
 
     if imagem.width > LARGURA_MAXIMA:
         proporcao = LARGURA_MAXIMA / imagem.width
@@ -35,17 +29,13 @@ def salvar_foto_otimizada(avaliacao_id: int, nome_original: str, conteudo: bytes
 
     nome_arquivo = f"{uuid.uuid4().hex}.jpg"
     caminho_completo = pasta / nome_arquivo
-
     imagem.save(caminho_completo, "JPEG", quality=QUALIDADE_JPEG, optimize=True)
-
-    tamanho_otimizado = caminho_completo.stat().st_size
-    caminho_relativo = f"avaliacoes/{avaliacao_id}/{nome_arquivo}"
 
     return {
         "nome_arquivo": nome_original,
         "tamanho_original": len(conteudo),
-        "tamanho_otimizado": tamanho_otimizado,
-        "caminho_relativo": caminho_relativo,
+        "tamanho_otimizado": caminho_completo.stat().st_size,
+        "caminho_relativo": f"avaliacoes/{avaliacao_id}/{nome_arquivo}",
     }
 
 
