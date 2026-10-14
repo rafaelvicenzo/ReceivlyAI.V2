@@ -7,6 +7,9 @@ import { ui } from "./theme.js";
 const ESRI_SATELITE =
   "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}";
 
+const COR_DESTAQUE_MAPA_PADRAO = "#F59E0B";
+const COR_IMOVEL_MAPA = "#2550EB";
+
 function iconPin(cor, label, size = 28) {
   const r = size / 2;
   const inner =
@@ -29,6 +32,7 @@ function MapaLeaflet({
   posicaoEditando = null,
   onPosicaoEditando = null,
   modoRelatorio = false,
+  corDestaque = COR_DESTAQUE_MAPA_PADRAO,
 }) {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
@@ -95,7 +99,7 @@ function MapaLeaflet({
     const coords = [[imovel.latitude, imovel.longitude]];
 
     L.marker([imovel.latitude, imovel.longitude], {
-      icon: iconPin("#2550eb", null, 28),
+      icon: iconPin(COR_IMOVEL_MAPA, null, 28),
       interactive: false,
       zIndexOffset: 500,
     }).addTo(layer);
@@ -105,7 +109,7 @@ function MapaLeaflet({
       if (comparavelEditando?.id === c.id) return;
 
       L.marker([c.latitude, c.longitude], {
-        icon: iconPin("#f59e0b", i + 1, 26),
+        icon: iconPin(corDestaque, i + 1, 26),
         interactive: false,
       }).addTo(layer);
       coords.push([c.latitude, c.longitude]);
@@ -114,7 +118,7 @@ function MapaLeaflet({
     if (comparavelEditando && posicaoEditando) {
       const idx = comparaveis.findIndex((c) => c.id === comparavelEditando.id);
       const marker = L.marker([posicaoEditando.lat, posicaoEditando.lng], {
-        icon: iconPin("#f59e0b", idx >= 0 ? idx + 1 : "?", 32),
+        icon: iconPin(corDestaque, idx >= 0 ? idx + 1 : "?", 32),
         draggable: true,
         zIndexOffset: 1000,
       }).addTo(layer);
@@ -145,7 +149,7 @@ function MapaLeaflet({
     }
 
     requestAnimationFrame(() => map.invalidateSize({ animate: false }));
-  }, [mapaPronto, imovel, comparaveis, comparavelEditando?.id]);
+  }, [mapaPronto, imovel, comparaveis, comparavelEditando?.id, posicaoEditando, corDestaque]);
 
   useEffect(() => {
     const marker = editMarkerRef.current;
@@ -168,7 +172,7 @@ function MapaLeaflet({
   );
 }
 
-export function MapaCroquiComparaveis({ imovel, comparaveis, altura = 360, modoRelatorio = false }) {
+export function MapaCroquiComparaveis({ imovel, comparaveis, altura = 360, modoRelatorio = false, corDestaque = COR_DESTAQUE_MAPA_PADRAO }) {
   const amostras = comparaveis.filter((c) => c.latitude != null && c.longitude != null);
   const semCoords = comparaveis.filter((c) => c.latitude == null || c.longitude == null);
 
@@ -202,6 +206,7 @@ export function MapaCroquiComparaveis({ imovel, comparaveis, altura = 360, modoR
         comparaveis={comparaveis}
         altura={altura}
         modoRelatorio={modoRelatorio}
+        corDestaque={corDestaque}
       />
     </div>
   );
@@ -215,6 +220,7 @@ export function ModalAjustePosicaoMapa({
   onClose,
   onSalvar,
   salvando,
+  corDestaque = COR_DESTAQUE_MAPA_PADRAO,
 }) {
   const [pos, setPos] = useState({
     lat: comparavel.latitude ?? imovel.latitude,
@@ -252,6 +258,7 @@ export function ModalAjustePosicaoMapa({
           comparavelEditando={comparavel}
           posicaoEditando={pos}
           onPosicaoEditando={setPos}
+          corDestaque={corDestaque}
         />
 
         <p className="text-[11px] text-slate-500 mt-3 mb-2">

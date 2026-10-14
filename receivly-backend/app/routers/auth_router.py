@@ -1,9 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app import models, schemas, auth, plano, perfil as perfil_acesso
+from app import models, schemas, auth, plano, perfil as perfil_acesso, curriculo_usuario
+
+TAMANHO_MAXIMO_CURRICULO_MB = 15
 
 router = APIRouter(prefix="/auth", tags=["Autenticação"])
 
@@ -55,7 +57,10 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
 def _usuario_response(usuario: models.Usuario, db: Session) -> schemas.UsuarioResponse:
     perfil_acesso.sincronizar_perfil_admin(usuario, db)
     base = schemas.UsuarioResponse.model_validate(usuario)
-    return base.model_copy(update={"eh_admin": perfil_acesso.eh_admin(usuario)})
+    return base.model_copy(update={
+        "eh_admin": perfil_acesso.eh_admin(usuario),
+        "curriculo_arquivo_url": curriculo_usuario.url_curriculo(usuario.curriculo_arquivo_caminho),
+    })
 
 
 @router.get("/me", response_model=schemas.UsuarioResponse)
@@ -76,6 +81,46 @@ def atualizar_perfil(
         if isinstance(valor, str):
             valor = valor.strip()
         setattr(usuario_atual, campo, valor)
+    db.commit()
+    db.refresh(usuario_atual)
+    return _usuario_response(usuario_atual, db)
+
+
+@router.post("/curriculo/arquivo", response_model=schemas.UsuarioResponse)
+async def enviar_curriculo_pdf(
+    arquivo: UploadFile = File(...),
+    usuario_atual: models.Usuario = Depends(auth.obter_usuario_atual),
+    db: Session = Depends(get_db),
+):
+    conteudo = await arquivo.read()
+    if len(conteudo) > TAMANHO_MAXIMO_CURRICULO_MB * 1024 * 1024:
+        raise HTTPException(status_code=400, detail=f"Arquivo maior que {TAMANHO_MAXIMO_CURRICULO_MB}MB.")
+
+    try:
+        caminho, nome = curriculo_usuario.salvar_curriculo_pdf(
+            usuario_atual.id,
+            arquivo.filename or "curriculo.pdf",
+            conteudo,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    curriculo_usuario.remover_curriculo_pdf(usuario_atual.curriculo_arquivo_caminho)
+    usuario_atual.curriculo_arquivo_caminho = caminho
+    usuario_atual.curriculo_arquivo_nome = nome
+    db.commit()
+    db.refresh(usuario_atual)
+    return _usuario_response(usuario_atual, db)
+
+
+@router.delete("/curriculo/arquivo", response_model=schemas.UsuarioResponse)
+def remover_curriculo_pdf(
+    usuario_atual: models.Usuario = Depends(auth.obter_usuario_atual),
+    db: Session = Depends(get_db),
+):
+    curriculo_usuario.remover_curriculo_pdf(usuario_atual.curriculo_arquivo_caminho)
+    usuario_atual.curriculo_arquivo_caminho = None
+    usuario_atual.curriculo_arquivo_nome = None
     db.commit()
     db.refresh(usuario_atual)
     return _usuario_response(usuario_atual, db)

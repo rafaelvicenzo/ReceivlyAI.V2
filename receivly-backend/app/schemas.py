@@ -1,7 +1,10 @@
 import json
+import re
 from datetime import datetime
 
 from pydantic import BaseModel, EmailStr, field_validator
+
+_COR_LAUDO_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
 
 
 # ---------- Auth ----------
@@ -35,6 +38,10 @@ class UsuarioResponse(BaseModel):
     local_laudo: str | None = None
     titulo_profissional: str | None = None
     qualificacao_laudo: str | None = None
+    curriculo_formacao: str | None = None
+    curriculo_experiencia: str | None = None
+    curriculo_arquivo_nome: str | None = None
+    curriculo_arquivo_url: str | None = None
 
     class Config:
         from_attributes = True
@@ -75,6 +82,8 @@ class PerfilUpdateRequest(BaseModel):
     local_laudo: str | None = None
     titulo_profissional: str | None = None
     qualificacao_laudo: str | None = None
+    curriculo_formacao: str | None = None
+    curriculo_experiencia: str | None = None
 
 
 # ---------- Leads ----------
@@ -312,11 +321,23 @@ class BrandingResponse(BaseModel):
     template_laudo_nome: str | None = None
     exibir_logo_laudo: bool = False
     ocultar_cabecalho_laudo: bool = False
+    cor_destaque_laudo: str = "#F59E0B"
 
 
 class BrandingConfigUpdate(BaseModel):
     exibir_logo_laudo: bool | None = None
     ocultar_cabecalho_laudo: bool | None = None
+    cor_destaque_laudo: str | None = None
+
+    @field_validator("cor_destaque_laudo")
+    @classmethod
+    def validar_cor_destaque(cls, valor: str | None) -> str | None:
+        if valor is None:
+            return None
+        cor = valor.strip().upper()
+        if not _COR_LAUDO_RE.match(cor):
+            raise ValueError("Use a cor no formato #RRGGBB (ex.: #F59E0B).")
+        return cor
 
 
 class DashboardAtividadeItem(BaseModel):
@@ -376,6 +397,23 @@ class FotoUpdateRequest(BaseModel):
     ordem: int | None = None
 
 
+class DocumentoResponse(BaseModel):
+    id: int
+    nome_arquivo: str
+    descricao: str | None = None
+    content_type: str | None = None
+    tamanho_bytes: int | None = None
+    url: str
+
+    class Config:
+        from_attributes = True
+
+
+class QuesitosUpdateRequest(BaseModel):
+    incluir_anexo_quesitos: bool | None = None
+    respostas_quesitos: str | None = None
+
+
 class AvaliacaoResumoResponse(BaseModel):
     id: int
     tipo: str
@@ -406,6 +444,11 @@ class AvaliacaoDetalheResponse(AvaliacaoImovelDados):
     valor_final: float | None
     comparaveis: list[ComparavelResponse]
     fotos: list[FotoResponse]
+    documentos: list[DocumentoResponse] = []
+    incluir_anexo_quesitos: bool = False
+    respostas_quesitos: str | None = None
+    quesitos_arquivo_nome: str | None = None
+    quesitos_arquivo_url: str | None = None
     usage: FairUseUsageResponse
     criado_em: datetime
     atualizado_em: datetime
@@ -532,21 +575,51 @@ class ComparavelFatoresResponse(BaseModel):
     fatores: FatoresIAResponse
 
 
+class TextoLaudoIARequest(BaseModel):
+    tipo: str = "perspectivas"
+    finalidade: str = "venda"
+    texto_atual: str = ""
+    valor_estimado: float | None = None
+
+
+class TextoLaudoIAResponse(BaseModel):
+    texto: str
+    gerado_por_ia: bool = True
+
+
+class LaudoJudicialData(BaseModel):
+    destinatario: str = ""
+    autor: str = ""
+    reu: str = ""
+    assunto: str = ""
+    rg: str = ""
+    cpf: str = ""
+    creci_inscricao_data: str = ""
+    creci_regiao: str = "4.ª Região / MG"
+
+
 class LaudoExportRequest(BaseModel):
     """Dados do laudo editados no front-end para exportação Word."""
+    documento_judicial: bool = False
+    judicial: LaudoJudicialData | None = None
     solicitante: str = ""
     processo: str | None = None
     matricula: str | None = None
     natureza_imovel: str = "urbano"
     finalidade: str = "venda"
+    metodo_avaliacao: str = "comparativo"
     local: str = ""
     data: str = ""
-    perita: str = ""
+    num_paginas: int | None = None
+    perita: str = ""  # legado — preferir nome_profissional
+    nome_profissional: str = ""
     titulo_profissional: str = ""
     qualificacao_laudo: str = ""
     creci: str = ""
     cnai: str = ""
+    incluir_anexo_quesitos: bool = False
+    respostas_quesitos: str | None = None
     valor_adotado: float | None = None
     valor_extenso: str | None = None
     textos: dict[str, str] = {}
-    pontos: dict[str, int] = {}
+    pontos: dict[str, float] = {}

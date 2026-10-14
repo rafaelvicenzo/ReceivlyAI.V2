@@ -25,6 +25,7 @@ def branding_response(imobiliaria: models.Imobiliaria) -> schemas.BrandingRespon
         template_laudo_nome=imobiliaria.template_laudo_nome,
         exibir_logo_laudo=bool(imobiliaria.usar_marca_dagua and imobiliaria.marca_dagua_caminho),
         ocultar_cabecalho_laudo=bool(imobiliaria.ocultar_cabecalho_laudo),
+        cor_destaque_laudo=(imobiliaria.cor_destaque_laudo or "#F59E0B").upper(),
     )
 
 

@@ -41,11 +41,63 @@ def _data_longa(data_iso: str) -> str:
         return data_iso
 
 
+def _numero_por_extenso(n: int) -> str:
+    un = [
+        "zero", "um", "dois", "três", "quatro", "cinco", "seis", "sete", "oito", "nove", "dez",
+        "onze", "doze", "treze", "catorze", "quinze", "dezesseis", "dezessete", "dezoito", "dezenove",
+    ]
+    dz = ["", "", "vinte", "trinta", "quarenta", "cinquenta", "sessenta", "setenta", "oitenta", "noventa"]
+    ct = [
+        "", "cento", "duzentos", "trezentos", "quatrocentos", "quinhentos",
+        "seiscentos", "setecentos", "oitocentos", "novecentos",
+    ]
+
+    def ate999(x: int) -> str:
+        if x == 100:
+            return "cem"
+        c = x // 100
+        r = x % 100
+        partes = []
+        if c:
+            partes.append(ct[c])
+        if r:
+            if r < 20:
+                partes.append(un[r])
+            else:
+                d, u = divmod(r, 10)
+                partes.append(f"{dz[d]} e {un[u]}" if u else dz[d])
+        return " e ".join(partes)
+
+    if n == 0:
+        return "zero"
+    milhoes = n // 1_000_000
+    milhares = (n % 1_000_000) // 1000
+    resto = n % 1000
+    grupos = []
+    if milhoes:
+        grupos.append(f"{ate999(milhoes)} {'milhão' if milhoes == 1 else 'milhões'}")
+    if milhares:
+        grupos.append("mil" if milhares == 1 else f"{ate999(milhares)} mil")
+    if resto:
+        grupos.append(ate999(resto))
+    return " e ".join(grupos)
+
+
+def _paginas_por_extenso(num_paginas: int | None) -> str:
+    if not num_paginas or num_paginas < 1:
+        return "[número por extenso]"
+    return _numero_por_extenso(num_paginas)
+
+
 def _titulo_laudo_capa(laudo: schemas.LaudoExportRequest) -> str:
     natureza = "RURAL" if (laudo.natureza_imovel or "urbano") == "rural" else "URBANO"
     if laudo.finalidade == "locacao":
         return f"LAUDO TÉCNICO DE AVALIAÇÃO DE LOCAÇÃO DE IMÓVEL {natureza}"
     return f"LAUDO TÉCNICO DE AVALIAÇÃO MERCADOLÓGICA DE IMÓVEL {natureza}"
+
+
+def _nome_profissional(laudo: schemas.LaudoExportRequest) -> str:
+    return (laudo.nome_profissional or laudo.perita or "").strip()
 
 
 def _qualificacao_laudo(laudo: schemas.LaudoExportRequest) -> str:
@@ -68,6 +120,84 @@ def _endereco_completo(av: models.Avaliacao) -> str:
     if loc:
         partes.append(loc)
     return ", ".join(p for p in partes if p)
+
+
+_ESTADOS_NOME = {
+    "AC": "Acre", "AL": "Alagoas", "AP": "Amapá", "AM": "Amazonas", "BA": "Bahia", "CE": "Ceará",
+    "DF": "Distrito Federal", "ES": "Espírito Santo", "GO": "Goiás", "MA": "Maranhão",
+    "MT": "Mato Grosso", "MS": "Mato Grosso do Sul", "MG": "Minas Gerais", "PA": "Pará",
+    "PB": "Paraíba", "PR": "Paraná", "PE": "Pernambuco", "PI": "Piauí", "RJ": "Rio de Janeiro",
+    "RN": "Rio Grande do Norte", "RS": "Rio Grande do Sul", "RO": "Rondônia", "RR": "Roraima",
+    "SC": "Santa Catarina", "SP": "São Paulo", "SE": "Sergipe", "TO": "Tocantins",
+}
+
+_DEFAULT_TEXTO_LOCALIZACAO = (
+    "O imóvel avaliando ({{tipoImovel}}) está localizado na {{endereco}}, n.º {{numero}}"
+    "{{complementoSuffix}}, no bairro de {{bairro}}, no município de {{cidade}}, no Estado de {{estadoNome}}."
+)
+
+_DEFAULT_TEXTO_VALORES_RESULTANTES = (
+    "Os valores resultantes encontram-se dentro da média pesquisada, quando considerados todos "
+    "os fatores que influenciam na sua formação."
+)
+
+_DEFAULT_TEXTO_ENCERRAMENTO = (
+    "O presente laudo técnico de avaliação é composto de {{numPaginas}} ({{numPaginasExtenso}}) páginas, "
+    "todas de um só lado, e assinado pelo profissional que subscreve esta última."
+)
+
+_DEFAULT_METODOLOGIA_COMPARATIVO = (
+    "Para determinação do {{valorTipo}}, utilizou-se o Método Comparativo Direto de Dados. Tal método "
+    "estabelece de forma direta um sistema de comparação com imóveis similares, através da coleta de "
+    "dados em pesquisa junto a imobiliárias, profissionais especializados, proprietários, anúncios "
+    "classificados, órgãos públicos e outros veículos que possam fornecer informações básicas e "
+    "concretas dos imóveis ofertados ou vendidos recentemente.\n\n"
+    "A similaridade dos imóveis pesquisados é de fundamental importância para que tenhamos elementos "
+    "que possam ser comparados de forma direta.\n\n"
+    "O processo comparativo, muito embora a pesquisa abranja imóveis similares em tamanho, padrão e "
+    "local, requer uma melhoria no seu grau de precisão, obtida por outro processo auxiliar, "
+    "denominado Homogeneização de Valores. Tal processo, recomendado por normas técnicas, visa corrigir "
+    "as discrepâncias dos elementos comparativos, através de fatores cuja aplicação de um ou outro "
+    "depende de cada caso. Assim, os fatores fundamentais, como: localização, atualização, fonte, "
+    "padrão construtivo, idade e conservação, etc., são levados em conta para que os elementos sejam "
+    "mais comparáveis, não obstante a similaridade já pré-selecionada na pesquisa.\n\n"
+    "O método comparativo, dado as características do imóvel em questão e pela viabilidade de sua "
+    "aplicação ao caso, é o que mais se ajusta para a determinação do {{valorTipo}}.\n\n"
+    "Para melhorar ainda mais a precisão, após o processo de homogeneização, a média obtida passa por "
+    "processo de saneamento de valores que eventualmente situam-se muito distantes do seu valor médio, "
+    "distorcendo o valor unitário. Em geral, utiliza-se um intervalo de confiança, eliminando-se os "
+    "valores fora deste intervalo e recalculando-se a nova média (média saneada). Assim, o valor "
+    "unitário obtido pode ser considerado como o real {{valorTipo}}.\n\n"
+    "Justificativa da metodologia: dentro da região de influência na qual se insere o imóvel foi possível "
+    "identificar uma amostragem em tamanho suficiente para se obter um valor médio confiável. Tal fato "
+    "nos levou à aplicação do método comparativo, com maior precisão para o caso em questão."
+)
+
+_DEFAULT_METODOLOGIA_EVOLUTIVO = (
+    "Para determinação do {{valorTipo}}, utilizou-se o Método Evolutivo, conforme preconiza a NBR "
+    "14.653 e as práticas consolidadas pelo IBAPE.\n\n"
+    "O método evolutivo determina o valor do imóvel pela soma do custo de reprodução ou reposição da "
+    "edificação, depreciada por idade, estado de conservação e obsolescências, acrescido do valor do "
+    "terreno, quando for o caso. A depreciação física foi considerada mediante o método Ross-Heidecke, "
+    "tendo em vista a idade aparente e o estado de conservação verificados em vistoria.\n\n"
+    "O custo unitário básico de construção foi obtido por meio de tabelas e boletins técnicos de "
+    "referência (como CUB/SINAPI ou equivalente regional), aplicados ao padrão construtivo e às "
+    "características do imóvel avaliando.\n\n"
+    "Justificativa da metodologia: diante das peculiaridades do imóvel avaliando e da necessidade de "
+    "refletir a formação de custo do bem edificado, optou-se pelo método evolutivo, por ser o mais "
+    "adequado à determinação do {{valorTipo}} no presente caso."
+)
+
+
+def _default_metodologia(metodo: str | None) -> str:
+    if (metodo or "").strip().lower() == "evolutivo":
+        return _DEFAULT_METODOLOGIA_EVOLUTIVO
+    return _DEFAULT_METODOLOGIA_COMPARATIVO
+
+
+def _nome_estado(uf: str | None) -> str:
+    chave = (uf or "").strip().upper()
+    return _ESTADOS_NOME.get(chave, uf or "[estado]")
 
 
 def _substituir_variaveis(texto: str, vars_map: dict[str, str]) -> str:
@@ -129,6 +259,7 @@ def montar_contexto(
         f"nº {avaliacao.numero}{complemento}, {avaliacao.bairro}, {avaliacao.cidade}/{avaliacao.estado}"
     )
 
+    complemento_suffix = f", {avaliacao.complemento}" if avaliacao.complemento else ""
     vars_texto = {
         "solicitante": laudo.solicitante or "[solicitante]",
         "objetivo": "determinar o valor de locação mensal" if eh_locacao else "determinar o valor de mercado",
@@ -137,16 +268,36 @@ def montar_contexto(
         "parteB": "locador" if eh_locacao else "vendedor",
         "negocio": "a locação" if eh_locacao else "a venda",
         "imovel": imovel_desc,
-        "perita": laudo.perita,
-        "avaliador": laudo.perita,
+        "avaliador": _nome_profissional(laudo),
+        "profissional": _nome_profissional(laudo),
         "tituloProfissional": laudo.titulo_profissional or "",
         "qualificacao": _qualificacao_laudo(laudo),
         "creci": laudo.creci,
         "cnai": laudo.cnai,
         "matricula": laudo.matricula or avaliacao.matricula or "",
+        "tipoImovel": (avaliacao.tipo or "imóvel").lower(),
+        "endereco": avaliacao.endereco or "[endereço]",
+        "numero": avaliacao.numero or "s/n",
+        "complementoSuffix": complemento_suffix,
+        "bairro": avaliacao.bairro or "[bairro]",
+        "cidade": avaliacao.cidade or "[cidade]",
+        "estadoNome": _nome_estado(avaliacao.estado),
+        "numPaginas": str(laudo.num_paginas or "[nº de páginas]"),
+        "numPaginasExtenso": _paginas_por_extenso(laudo.num_paginas),
+        "dataLonga": _data_longa(laudo.data),
+        "local": laudo.local or "[local]",
     }
 
-    textos = {chave: _substituir_variaveis(valor, vars_texto) for chave, valor in (laudo.textos or {}).items()}
+    textos_raw = dict(laudo.textos or {})
+    if not (textos_raw.get("localizacao") or "").strip():
+        textos_raw["localizacao"] = _DEFAULT_TEXTO_LOCALIZACAO
+    if not (textos_raw.get("valoresResultantes") or "").strip():
+        textos_raw["valoresResultantes"] = _DEFAULT_TEXTO_VALORES_RESULTANTES
+    if not (textos_raw.get("metodologia") or "").strip():
+        textos_raw["metodologia"] = _default_metodologia(laudo.metodo_avaliacao)
+    if not (textos_raw.get("encerramento") or "").strip():
+        textos_raw["encerramento"] = _DEFAULT_TEXTO_ENCERRAMENTO
+    textos = {chave: _substituir_variaveis(valor, vars_texto) for chave, valor in textos_raw.items()}
 
     matricula = laudo.matricula or avaliacao.matricula or ""
     titulo_capa = _titulo_laudo_capa(laudo)
@@ -157,8 +308,10 @@ def montar_contexto(
         "matricula": matricula,
         "natureza_imovel": laudo.natureza_imovel or "urbano",
         "titulo_laudo": titulo_capa,
-        "perita": laudo.perita,
-        "avaliador": laudo.perita,
+        "perita": _nome_profissional(laudo),
+        "avaliador": _nome_profissional(laudo),
+        "profissional": _nome_profissional(laudo),
+        "nome_profissional": _nome_profissional(laudo),
         "titulo_profissional": laudo.titulo_profissional or "",
         "qualificacao_laudo": _qualificacao_laudo(laudo),
         "creci": laudo.creci,
@@ -189,9 +342,14 @@ def montar_contexto(
         "valor_unitario_fmt": _fmt_brl(laudo_calc["unitario_final"]),
         "laudo_calc": laudo_calc,
         "imobiliaria_nome": imobiliaria.nome,
+        "cor_destaque_laudo": (imobiliaria.cor_destaque_laudo or "#F59E0B").upper(),
         "texto_introducao": textos.get("introducao", ""),
         "texto_premissas": textos.get("premissas", ""),
         "texto_resultados": textos.get("resultados", ""),
+        "texto_localizacao": textos.get("localizacao", ""),
+        "texto_mercado_atual": textos.get("mercadoAtual", ""),
+        "texto_perspectivas": textos.get("perspectivas", ""),
+        "texto_valores_resultantes": textos.get("valoresResultantes", ""),
         "texto_metodologia": textos.get("metodologia", ""),
         "texto_homogeneizacao": textos.get("homogeneizacao", ""),
         "texto_tratamento": textos.get("tratamento", ""),
@@ -228,6 +386,10 @@ def _montar_texto_completo(ctx: dict) -> str:
         ("A. Introdução", "texto_introducao"),
         ("B. Premissas e ressalvas", "texto_premissas"),
         ("C. Resultados", "texto_resultados"),
+        ("E. Localização", "texto_localizacao"),
+        ("F.1 Mercado atual", "texto_mercado_atual"),
+        ("F.2 Perspectivas futuras", "texto_perspectivas"),
+        ("F.3 Valores resultantes", "texto_valores_resultantes"),
         ("H. Metodologia", "texto_metodologia"),
         ("Homogeneização de valores", "texto_homogeneizacao"),
         ("I. Tratamento por fatores", "texto_tratamento"),
@@ -238,7 +400,7 @@ def _montar_texto_completo(ctx: dict) -> str:
         if texto and texto.strip():
             linhas.extend([titulo, texto, ""])
     linhas.append(f"{ctx['local']}, {ctx['data_longa']}.")
-    linhas.extend([ctx["perita"], ctx["creci"], ctx["cnai"]])
+    linhas.extend([ctx["nome_profissional"], ctx["creci"], ctx["cnai"]])
     return "\n".join(l for l in linhas if l is not None)
 
 
@@ -421,6 +583,10 @@ def _preencher_corpo_laudo(
         ("A. Introdução", ctx["texto_introducao"]),
         ("B. Premissas e ressalvas", ctx["texto_premissas"]),
         ("C. Resultados", ctx["texto_resultados"]),
+        ("E. Localização", ctx["texto_localizacao"]),
+        ("F.1 Mercado atual", ctx["texto_mercado_atual"]),
+        ("F.2 Perspectivas futuras", ctx["texto_perspectivas"]),
+        ("F.3 Valores resultantes", ctx["texto_valores_resultantes"]),
         ("H. Metodologia", ctx["texto_metodologia"]),
         ("Homogeneização de valores", ctx["texto_homogeneizacao"]),
         ("I. Tratamento por fatores", ctx["texto_tratamento"]),
@@ -439,14 +605,14 @@ def _preencher_corpo_laudo(
     assinatura = doc.add_paragraph()
     assinatura.alignment = WD_ALIGN_PARAGRAPH.RIGHT
     assinatura.add_run(f"\n{ctx['local']}, {ctx['data_longa']}.\n\n").italic = True
-    assinatura.add_run(f"{ctx['perita']}\n").bold = True
+    assinatura.add_run(f"{ctx['nome_profissional']}\n").bold = True
     assinatura.add_run(f"{ctx['creci']}\n")
     assinatura.add_run(ctx["cnai"])
 
 
 def _mapa_substituicoes(ctx: dict) -> dict[str, str]:
     chaves = [
-        "solicitante", "processo", "matricula", "natureza_imovel", "titulo_laudo", "perita", "avaliador", "titulo_profissional", "qualificacao_laudo",
+        "solicitante", "processo", "matricula", "natureza_imovel", "titulo_laudo", "perita", "avaliador", "profissional", "nome_profissional", "titulo_profissional", "qualificacao_laudo",
         "creci", "cnai", "local", "data", "data_longa",
         "finalidade", "valor_tipo", "objetivo", "endereco", "numero", "complemento",
         "bairro", "cidade", "estado", "cep", "tipo", "area_imovel", "endereco_completo",
@@ -457,9 +623,13 @@ def _mapa_substituicoes(ctx: dict) -> dict[str, str]:
     ]
     subs = {k: str(ctx.get(k, "") or "") for k in chaves}
     subs["VALOR_ESTIMADO"] = subs.get("valor_estimado_fmt", "")
-    subs["AVALIADOR"] = subs.get("avaliador", subs.get("perita", ""))
-    subs["AVALIADORA"] = subs["AVALIADOR"]
-    subs["PERITA"] = subs.get("perita", "")
+    nome = subs.get("nome_profissional") or subs.get("avaliador") or subs.get("profissional") or subs.get("perita", "")
+    subs["NOME_PROFISSIONAL"] = nome
+    subs["PROFISSIONAL"] = nome
+    subs["AVALIADOR"] = nome
+    subs["AVALIADORA"] = nome
+    subs["PERITA"] = nome
+    subs["PERITO"] = nome
     subs["QUALIFICACAO"] = subs.get("qualificacao_laudo", "")
     subs["qualificacao"] = subs["QUALIFICACAO"]
     subs["tituloProfissional"] = subs.get("titulo_profissional", "")
@@ -669,41 +839,84 @@ def _criar_laudo_pdf(ctx: dict, *, logo_path: Path | None = None, ocultar_cabeca
     return buf.getvalue()
 
 
+def _converter_docx_para_pdf(docx_bytes: bytes) -> bytes | None:
+    """Converte DOCX preenchido em PDF (Word COM, docx2pdf ou LibreOffice)."""
+    import subprocess
+    import sys
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        docx_path = Path(tmp) / "laudo.docx"
+        pdf_path = Path(tmp) / "laudo.pdf"
+        docx_path.write_bytes(docx_bytes)
+
+        if sys.platform == "win32":
+            try:
+                import win32com.client
+
+                word = win32com.client.Dispatch("Word.Application")
+                word.Visible = False
+                doc = word.Documents.Open(str(docx_path.resolve()))
+                doc.SaveAs(str(pdf_path.resolve()), FileFormat=17)
+                doc.Close(False)
+                word.Quit()
+                if pdf_path.exists():
+                    return pdf_path.read_bytes()
+            except Exception:
+                try:
+                    word.Quit()
+                except Exception:
+                    pass
+
+        try:
+            from docx2pdf import convert
+
+            convert(str(docx_path), str(pdf_path))
+            if pdf_path.exists():
+                return pdf_path.read_bytes()
+        except Exception:
+            pass
+
+        for cmd in ("soffice", "libreoffice"):
+            try:
+                subprocess.run(
+                    [cmd, "--headless", "--convert-to", "pdf", "--outdir", tmp, str(docx_path)],
+                    check=True,
+                    capture_output=True,
+                    timeout=120,
+                )
+                if pdf_path.exists():
+                    return pdf_path.read_bytes()
+            except Exception:
+                continue
+
+    return None
+
+
 def gerar_laudo_pdf(
     avaliacao: models.Avaliacao,
     imobiliaria: models.Imobiliaria,
     laudo: schemas.LaudoExportRequest,
 ) -> tuple[bytes, str]:
-    """Com template Word, tenta converter DOCX→PDF (Windows + Word). Senão, PDF simplificado."""
-    base = Path(imobiliaria.template_laudo_nome or "laudo").stem
-    nome_pdf = f"{base}_{avaliacao.id}.pdf"
-
-    if imobiliaria.template_laudo_caminho:
-        docx_bytes, _ = gerar_laudo_docx(avaliacao, imobiliaria, laudo)
-        try:
-            import tempfile
-            from docx2pdf import convert
-
-            with tempfile.TemporaryDirectory() as tmp:
-                docx_path = Path(tmp) / "laudo.docx"
-                pdf_path = Path(tmp) / "laudo.pdf"
-                docx_path.write_bytes(docx_bytes)
-                convert(str(docx_path), str(pdf_path))
-                if pdf_path.exists():
-                    return pdf_path.read_bytes(), nome_pdf
-        except Exception:
-            pass
-        raise ValueError(
-            "PDF com template exige Microsoft Word instalado (Windows) para conversão. "
-            "Use «Gerar Word» e exporte para PDF pelo Word, ou remova o template para PDF simplificado."
-        )
-
+    """Gera PDF a partir do mesmo DOCX do template (Word/LibreOffice) ou layout simplificado."""
     laudo_calc = calculo_avaliacao.calcular_laudo_detalhado(avaliacao)
     resultado = calculo_avaliacao.calcular_resultado(avaliacao)
     ctx = montar_contexto(avaliacao, imobiliaria, laudo, resultado, laudo_calc=laudo_calc)
-    conteudo = _criar_laudo_pdf(
-        ctx,
-        logo_path=_logo_path_para_laudo(imobiliaria),
-        ocultar_cabecalho=bool(imobiliaria.ocultar_cabecalho_laudo),
-    )
+    logo_path = _logo_path_para_laudo(imobiliaria)
+    omitir_cab = bool(imobiliaria.ocultar_cabecalho_laudo)
+    base = Path(imobiliaria.template_laudo_nome or "laudo").stem
+    nome_pdf = f"{base}_{avaliacao.id}.pdf"
+
+    docx_bytes, _ = gerar_laudo_docx(avaliacao, imobiliaria, laudo)
+    pdf_bytes = _converter_docx_para_pdf(docx_bytes)
+    if pdf_bytes:
+        return pdf_bytes, nome_pdf
+
+    if imobiliaria.template_laudo_caminho:
+        raise ValueError(
+            "Não foi possível converter o laudo para PDF com seu template. "
+            "No Windows, instale o Microsoft Word ou use «Gerar Word» e exporte para PDF pelo Word."
+        )
+
+    conteudo = _criar_laudo_pdf(ctx, logo_path=logo_path, ocultar_cabecalho=omitir_cab)
     return conteudo, nome_pdf

@@ -1,11 +1,11 @@
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 import json
 
-from app import models, schemas, auth, calculo_avaliacao, fotos_avaliacao, pesquisa_mercado, localizacao, fatores_ia, branding_avaliacao, geracao_laudo, usage_limits
+from app import models, schemas, auth, calculo_avaliacao, fotos_avaliacao, documentos_avaliacao, quesitos_avaliacao, pesquisa_mercado, localizacao, fatores_ia, branding_avaliacao, geracao_laudo, usage_limits, ia_laudo, gemini_client
 from app.comparaveis_demo import pesquisar_comparaveis_demo
 from app.config import settings
 from app.perfil import eh_admin
@@ -13,6 +13,7 @@ from app.perfil import eh_admin
 router = APIRouter(prefix="/avaliacoes", tags=["Avaliação Imobiliária"])
 
 TAMANHO_MAXIMO_FOTO_MB = 15
+TAMANHO_MAXIMO_DOCUMENTO_MB = 15
 
 
 def _url_foto(foto: models.FotoAvaliacao) -> str:
@@ -28,6 +29,21 @@ def _foto_response(foto: models.FotoAvaliacao) -> schemas.FotoResponse:
         tamanho_original=foto.tamanho_original,
         tamanho_otimizado=foto.tamanho_otimizado,
         url=_url_foto(foto),
+    )
+
+
+def _url_documento(doc: models.DocumentoAvaliacao) -> str:
+    return f"/uploads/{doc.caminho_relativo}"
+
+
+def _documento_response(doc: models.DocumentoAvaliacao) -> schemas.DocumentoResponse:
+    return schemas.DocumentoResponse(
+        id=doc.id,
+        nome_arquivo=doc.nome_arquivo,
+        descricao=doc.descricao,
+        content_type=doc.content_type,
+        tamanho_bytes=doc.tamanho_bytes,
+        url=_url_documento(doc),
     )
 
 
@@ -106,6 +122,11 @@ def _avaliacao_detalhe(
         longitude=avaliacao.longitude,
         comparaveis=[_comparavel_response(c) for c in avaliacao.comparaveis],
         fotos=[_foto_response(f) for f in avaliacao.fotos],
+        documentos=[_documento_response(d) for d in avaliacao.documentos],
+        incluir_anexo_quesitos=bool(avaliacao.incluir_anexo_quesitos),
+        respostas_quesitos=avaliacao.respostas_quesitos,
+        quesitos_arquivo_nome=avaliacao.quesitos_arquivo_nome,
+        quesitos_arquivo_url=quesitos_avaliacao.url_quesitos(avaliacao.quesitos_arquivo_caminho),
         usage=usage_limits.build_usage_snapshot(db, avaliacao.imobiliaria_id, avaliacao),
         criado_em=avaliacao.criado_em,
         atualizado_em=avaliacao.atualizado_em,
@@ -145,6 +166,8 @@ def atualizar_branding(
         imob.usar_marca_dagua = 1 if dados.exibir_logo_laudo else 0
     if dados.ocultar_cabecalho_laudo is not None:
         imob.ocultar_cabecalho_laudo = 1 if dados.ocultar_cabecalho_laudo else 0
+    if dados.cor_destaque_laudo is not None:
+        imob.cor_destaque_laudo = dados.cor_destaque_laudo
     db.commit()
     db.refresh(imob)
     return branding_avaliacao.branding_response(imob)
@@ -277,6 +300,9 @@ def excluir_avaliacao(
     avaliacao = _buscar_avaliacao(avaliacao_id, usuario_atual, db)
     for foto in avaliacao.fotos:
         fotos_avaliacao.remover_foto(foto.caminho_relativo)
+    for doc in avaliacao.documentos:
+        documentos_avaliacao.remover_documento(doc.caminho_relativo)
+    quesitos_avaliacao.remover_quesitos_pdf(avaliacao.quesitos_arquivo_caminho)
     db.delete(avaliacao)
     db.commit()
     return {"ok": True}
@@ -522,6 +548,122 @@ def remover_foto(
     return {"ok": True}
 
 
+# ---------- Documentos anexos ----------
+
+@router.post("/{avaliacao_id}/documentos", response_model=schemas.DocumentoResponse)
+async def enviar_documento(
+    avaliacao_id: int,
+    arquivo: UploadFile = File(...),
+    descricao: str = Form(""),
+    usuario_atual: models.Usuario = Depends(auth.obter_usuario_atual),
+    db: Session = Depends(get_db),
+):
+    avaliacao = _buscar_avaliacao(avaliacao_id, usuario_atual, db)
+    conteudo = await arquivo.read()
+    if len(conteudo) > TAMANHO_MAXIMO_DOCUMENTO_MB * 1024 * 1024:
+        raise HTTPException(status_code=400, detail=f"Arquivo maior que {TAMANHO_MAXIMO_DOCUMENTO_MB}MB.")
+
+    try:
+        metadados = documentos_avaliacao.salvar_documento(avaliacao.id, arquivo.filename or "documento", conteudo)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    doc = models.DocumentoAvaliacao(
+        avaliacao_id=avaliacao.id,
+        descricao=descricao.strip() or None,
+        content_type=arquivo.content_type,
+        ordem=len(avaliacao.documentos),
+        **metadados,
+    )
+    db.add(doc)
+    db.commit()
+    db.refresh(doc)
+    return _documento_response(doc)
+
+
+@router.delete("/{avaliacao_id}/documentos/{documento_id}")
+def remover_documento(
+    avaliacao_id: int,
+    documento_id: int,
+    usuario_atual: models.Usuario = Depends(auth.obter_usuario_atual),
+    db: Session = Depends(get_db),
+):
+    avaliacao = _buscar_avaliacao(avaliacao_id, usuario_atual, db)
+    doc = next((d for d in avaliacao.documentos if d.id == documento_id), None)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Documento não encontrado.")
+
+    documentos_avaliacao.remover_documento(doc.caminho_relativo)
+    db.delete(doc)
+    db.commit()
+    return {"ok": True}
+
+
+# ---------- Anexo III — Quesitos ----------
+
+@router.patch("/{avaliacao_id}/quesitos", response_model=schemas.AvaliacaoDetalheResponse)
+def atualizar_quesitos(
+    avaliacao_id: int,
+    dados: schemas.QuesitosUpdateRequest,
+    usuario_atual: models.Usuario = Depends(auth.obter_usuario_atual),
+    db: Session = Depends(get_db),
+):
+    avaliacao = _buscar_avaliacao(avaliacao_id, usuario_atual, db)
+    payload = dados.model_dump(exclude_unset=True)
+    if "incluir_anexo_quesitos" in payload:
+        avaliacao.incluir_anexo_quesitos = 1 if payload["incluir_anexo_quesitos"] else 0
+    if "respostas_quesitos" in payload:
+        avaliacao.respostas_quesitos = payload["respostas_quesitos"]
+    db.commit()
+    db.refresh(avaliacao)
+    return _avaliacao_detalhe(avaliacao, db)
+
+
+@router.post("/{avaliacao_id}/quesitos/arquivo", response_model=schemas.AvaliacaoDetalheResponse)
+async def enviar_quesitos_pdf(
+    avaliacao_id: int,
+    arquivo: UploadFile = File(...),
+    usuario_atual: models.Usuario = Depends(auth.obter_usuario_atual),
+    db: Session = Depends(get_db),
+):
+    avaliacao = _buscar_avaliacao(avaliacao_id, usuario_atual, db)
+    conteudo = await arquivo.read()
+    if len(conteudo) > TAMANHO_MAXIMO_DOCUMENTO_MB * 1024 * 1024:
+        raise HTTPException(status_code=400, detail=f"Arquivo maior que {TAMANHO_MAXIMO_DOCUMENTO_MB}MB.")
+
+    try:
+        caminho, nome = quesitos_avaliacao.salvar_quesitos_pdf(
+            avaliacao.id,
+            arquivo.filename or "quesitos.pdf",
+            conteudo,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    quesitos_avaliacao.remover_quesitos_pdf(avaliacao.quesitos_arquivo_caminho)
+    avaliacao.quesitos_arquivo_caminho = caminho
+    avaliacao.quesitos_arquivo_nome = nome
+    avaliacao.incluir_anexo_quesitos = 1
+    db.commit()
+    db.refresh(avaliacao)
+    return _avaliacao_detalhe(avaliacao, db)
+
+
+@router.delete("/{avaliacao_id}/quesitos/arquivo", response_model=schemas.AvaliacaoDetalheResponse)
+def remover_quesitos_pdf(
+    avaliacao_id: int,
+    usuario_atual: models.Usuario = Depends(auth.obter_usuario_atual),
+    db: Session = Depends(get_db),
+):
+    avaliacao = _buscar_avaliacao(avaliacao_id, usuario_atual, db)
+    quesitos_avaliacao.remover_quesitos_pdf(avaliacao.quesitos_arquivo_caminho)
+    avaliacao.quesitos_arquivo_caminho = None
+    avaliacao.quesitos_arquivo_nome = None
+    db.commit()
+    db.refresh(avaliacao)
+    return _avaliacao_detalhe(avaliacao, db)
+
+
 # ---------- Pesquisa de mercado (busca real via OpenAI web_search) ----------
 
 @router.post("/{avaliacao_id}/pesquisar-mercado", response_model=schemas.MarketSearchResponse)
@@ -596,6 +738,31 @@ def obter_resultado(
     return calculo_avaliacao.calcular_resultado(avaliacao)
 
 
+@router.post("/{avaliacao_id}/ia/texto-laudo", response_model=schemas.TextoLaudoIAResponse)
+def gerar_texto_laudo_ia(
+    avaliacao_id: int,
+    body: schemas.TextoLaudoIARequest,
+    usuario_atual: models.Usuario = Depends(auth.obter_usuario_atual),
+    db: Session = Depends(get_db),
+):
+    if body.tipo != "perspectivas":
+        raise HTTPException(status_code=400, detail="Tipo de texto não suportado.")
+    avaliacao = _buscar_avaliacao(avaliacao_id, usuario_atual, db)
+    try:
+        laudo_calc = calculo_avaliacao.calcular_laudo_detalhado(avaliacao)
+        valor = body.valor_estimado or avaliacao.valor_final or laudo_calc.get("valor_calculado")
+        texto = ia_laudo.gerar_perspectivas(
+            avaliacao,
+            finalidade=body.finalidade or "venda",
+            texto_atual=body.texto_atual or "",
+            valor_estimado=valor,
+            qtd_comparaveis=len(avaliacao.comparaveis),
+        )
+        return schemas.TextoLaudoIAResponse(texto=texto, gerado_por_ia=gemini_client.disponivel())
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Erro ao gerar texto com IA: {exc}") from exc
+
+
 @router.post("/{avaliacao_id}/exportar-laudo-pdf")
 def exportar_laudo_pdf(
     avaliacao_id: int,
@@ -607,6 +774,8 @@ def exportar_laudo_pdf(
     imob = db.query(models.Imobiliaria).filter(models.Imobiliaria.id == usuario_atual.imobiliaria_id).first()
     try:
         conteudo, nome_arquivo = geracao_laudo.gerar_laudo_pdf(avaliacao, imob, dados)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Erro ao gerar laudo PDF: {exc}") from exc
     return Response(

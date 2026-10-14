@@ -17,6 +17,7 @@ class Imobiliaria(Base):
     template_laudo_nome = Column(String, nullable=True)
     usar_marca_dagua = Column(Integer, default=0)
     ocultar_cabecalho_laudo = Column(Integer, default=0)
+    cor_destaque_laudo = Column(String, default="#F59E0B")
     plano_status = Column(String, default="inativo")  # inativo | ativo | expirado
     plano_valido_ate = Column(DateTime, nullable=True)
     asaas_customer_id = Column(String, nullable=True)
@@ -51,6 +52,10 @@ class Usuario(Base):
     local_laudo = Column(String, nullable=True)
     titulo_profissional = Column(String, nullable=True)
     qualificacao_laudo = Column(Text, nullable=True)
+    curriculo_formacao = Column(Text, nullable=True)
+    curriculo_experiencia = Column(Text, nullable=True)
+    curriculo_arquivo_caminho = Column(String, nullable=True)
+    curriculo_arquivo_nome = Column(String, nullable=True)
     perfil = Column(String, default="cliente")  # admin | cliente
     criado_em = Column(DateTime, default=datetime.datetime.utcnow)
 
@@ -154,12 +159,33 @@ class Avaliacao(Base):
     latitude = Column(Float, nullable=True)
     longitude = Column(Float, nullable=True)
     market_search_count = Column(Integer, default=0)
+    incluir_anexo_quesitos = Column(Integer, default=0)
+    respostas_quesitos = Column(Text, nullable=True)
+    quesitos_arquivo_caminho = Column(String, nullable=True)
+    quesitos_arquivo_nome = Column(String, nullable=True)
 
     criado_em = Column(DateTime, default=datetime.datetime.utcnow)
     atualizado_em = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 
     comparaveis = relationship("ComparavelAvaliacao", back_populates="avaliacao", cascade="all, delete-orphan", order_by="ComparavelAvaliacao.id")
     fotos = relationship("FotoAvaliacao", back_populates="avaliacao", cascade="all, delete-orphan", order_by="FotoAvaliacao.ordem")
+    documentos = relationship("DocumentoAvaliacao", back_populates="avaliacao", cascade="all, delete-orphan", order_by="DocumentoAvaliacao.ordem")
+
+
+class DocumentoAvaliacao(Base):
+    __tablename__ = "documentos_avaliacao"
+
+    id = Column(Integer, primary_key=True, index=True)
+    avaliacao_id = Column(Integer, ForeignKey("avaliacoes.id"), nullable=False)
+    nome_arquivo = Column(String, nullable=False)
+    descricao = Column(String, nullable=True)
+    content_type = Column(String, nullable=True)
+    tamanho_bytes = Column(Integer, nullable=True)
+    caminho_relativo = Column(String, nullable=False)
+    ordem = Column(Integer, default=0)
+    criado_em = Column(DateTime, default=datetime.datetime.utcnow)
+
+    avaliacao = relationship("Avaliacao", back_populates="documentos")
 
 
 class ComparavelAvaliacao(Base):

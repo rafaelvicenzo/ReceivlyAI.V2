@@ -1381,8 +1381,25 @@ function urlFoto(f) {
   return f?.url || f?.urlOtimizada || f?.urlOriginal || "";
 }
 
+const COR_LAUDO_PADRAO = "#F59E0B";
+const CORES_LAUDO_SUGERIDAS = ["#F59E0B", "#EA580C", "#EAB308", "#2563EB", "#059669", "#7C3AED", "#1F2937", "#000000"];
+
+function normalizarCorLaudo(cor) {
+  const c = (cor || "").trim();
+  return /^#[0-9A-Fa-f]{6}$/.test(c) ? c.toUpperCase() : COR_LAUDO_PADRAO;
+}
+
+function corLaudoEfetiva(branding) {
+  return normalizarCorLaudo(branding?.corDestaqueLaudo);
+}
+
 function brandingFromApi(b) {
-  if (!b) return { logoUrl: null, templateLaudoUrl: null, templateLaudoNome: null, exibirLogoLaudo: false, ocultarCabecalhoLaudo: false };
+  if (!b) {
+    return {
+      logoUrl: null, templateLaudoUrl: null, templateLaudoNome: null,
+      exibirLogoLaudo: false, ocultarCabecalhoLaudo: false, corDestaqueLaudo: COR_LAUDO_PADRAO,
+    };
+  }
   const logoPath = b.logo_laudo_url || b.marca_dagua_url;
   return {
     logoUrl: logoPath ? `${API_BASE}${logoPath}` : null,
@@ -1390,6 +1407,7 @@ function brandingFromApi(b) {
     templateLaudoNome: b.template_laudo_nome || null,
     exibirLogoLaudo: !!(b.exibir_logo_laudo ?? b.usar_marca_dagua),
     ocultarCabecalhoLaudo: !!b.ocultar_cabecalho_laudo,
+    corDestaqueLaudo: normalizarCorLaudo(b.cor_destaque_laudo),
   };
 }
 
@@ -1415,6 +1433,73 @@ function fotoFromApi(f) {
     id: f.id, nome: f.nome_arquivo, categoria: f.categoria, ordem: f.ordem,
     tamanhoOriginal: f.tamanho_original, tamanhoOtimizado: f.tamanho_otimizado,
     url: `${API_BASE}${f.url}`, remota: true,
+  };
+}
+
+function PdfPreview({ url, title, className = "w-full min-h-[680px] border border-slate-200 rounded bg-white" }) {
+  const [blobUrl, setBlobUrl] = useState(null);
+  const [erro, setErro] = useState(null);
+
+  useEffect(() => {
+    let active = true;
+    let objectUrl = null;
+    setBlobUrl(null);
+    setErro(null);
+    if (!url) return undefined;
+
+    fetch(url)
+      .then((r) => {
+        if (!r.ok) throw new Error("Não foi possível carregar o PDF. Verifique se o backend está rodando.");
+        return r.blob();
+      })
+      .then((blob) => {
+        if (!active) return;
+        objectUrl = URL.createObjectURL(blob);
+        setBlobUrl(objectUrl);
+      })
+      .catch((err) => {
+        if (active) setErro(err.message || "Erro ao carregar PDF.");
+      });
+
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [url]);
+
+  if (erro) {
+    return (
+      <div className="rounded-lg border border-dashed border-red-200 bg-red-50 px-4 py-8 text-center text-sm text-red-800">
+        <p>{erro}</p>
+        <a href={url} target="_blank" rel="noreferrer" className="mt-3 inline-block text-brand-600 hover:text-brand-700 text-xs font-medium">Abrir em nova aba</a>
+      </div>
+    );
+  }
+  if (!blobUrl) {
+    return (
+      <div className={`flex items-center justify-center gap-2 text-sm text-slate-500 ${className}`}>
+        <Loader2 className="h-4 w-4 animate-spin" /> Carregando PDF...
+      </div>
+    );
+  }
+  return <iframe title={title || "PDF"} src={`${blobUrl}#toolbar=0`} className={className} />;
+}
+
+function documentoFromApi(d) {
+  const ct = (d.content_type || "").toLowerCase();
+  const nome = (d.nome_arquivo || "").toLowerCase();
+  const ehPdf = ct.includes("pdf") || nome.endsWith(".pdf");
+  const ehImagem = ct.startsWith("image/") || /\.(jpe?g|png|webp)$/i.test(nome);
+  return {
+    id: d.id,
+    nome: d.nome_arquivo,
+    descricao: d.descricao || "",
+    contentType: d.content_type || "",
+    tamanhoBytes: d.tamanho_bytes,
+    url: `${API_BASE}${d.url}`,
+    ehPdf,
+    ehImagem,
+    ehVisualizavel: ehPdf || ehImagem,
   };
 }
 
@@ -1487,22 +1572,55 @@ function parseNumeroBR(val) {
   return Number.isFinite(n) ? n : NaN;
 }
 
+/** Formata valor monetário enquanto digita (pt-BR). */
+function mascaraValorMoedaBR(val) {
+  const raw = String(val ?? "");
+  if (!raw.trim()) return "";
+  const soDigitos = /^\d+$/.test(raw.replace(/\s/g, ""));
+  if (soDigitos) {
+    return parseInt(raw.replace(/\D/g, ""), 10).toLocaleString("pt-BR");
+  }
+  const n = parseNumeroBR(raw);
+  return Number.isFinite(n) ? formatNumeroBR(n) : raw;
+}
+
+/** Valor numérico a partir do campo monetário; usa fallback se vazio ou inválido. */
+function valorMoedaBR(val, fallback = 0) {
+  if (val == null || String(val).trim() === "") return fallback;
+  const n = parseNumeroBR(val);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
 const campoInputClass = ui.input;
 
-function Campo({ label, children }) {
+function LabelObrigatorio({ obrigatorio, children }) {
+  return (
+    <>
+      {children}
+      {obrigatorio && <span className="text-amber-600 ml-0.5 font-semibold" title="Campo obrigatório">*</span>}
+    </>
+  );
+}
+
+function Campo({ label, children, obrigatorio, erro }) {
   return (
     <div>
-      <label className="text-xs font-medium text-slate-600 mb-1.5 block">{label}</label>
+      <label className="text-xs font-medium text-slate-600 mb-1.5 block">
+        <LabelObrigatorio obrigatorio={obrigatorio}>{label}</LabelObrigatorio>
+      </label>
       {children}
+      {erro && <p className="text-[11px] text-red-500 mt-1">{erro}</p>}
     </div>
   );
 }
 
-function CampoComHint({ label, hint, children }) {
+function CampoComHint({ label, hint, children, obrigatorio, erro }) {
   return (
     <div>
       <div className="flex items-start gap-1.5 mb-1.5">
-        <label className="text-xs font-medium text-slate-600">{label}</label>
+        <label className="text-xs font-medium text-slate-600">
+          <LabelObrigatorio obrigatorio={obrigatorio}>{label}</LabelObrigatorio>
+        </label>
         {hint && (
           <span className="group relative shrink-0 mt-0.5">
             <HelpCircle className="h-3.5 w-3.5 text-slate-400 cursor-help" />
@@ -1513,6 +1631,7 @@ function CampoComHint({ label, hint, children }) {
         )}
       </div>
       {children}
+      {erro && <p className="text-[11px] text-red-500 mt-1">{erro}</p>}
     </div>
   );
 }
@@ -1811,6 +1930,8 @@ function AvaliacoesScreen({ avaliacoes, carregando, erro, onNovaAvaliacao, onCon
 }
 
 function EtapaImovel({ imovel, setImovel, onProximo, token, buscandoCep, erroCep, onConsultarCep, salvando }) {
+  const [mostrarErros, setMostrarErros] = useState(false);
+
   function set(campo, valor) { setImovel((i) => ({ ...i, [campo]: valor })); }
 
   function handleCepChange(e) {
@@ -1819,12 +1940,27 @@ function EtapaImovel({ imovel, setImovel, onProximo, token, buscandoCep, erroCep
     if (formatado.replace(/\D/g, "").length === 8) onConsultarCep(formatado);
   }
 
+  const enderecoValido = Boolean(imovel.endereco?.trim());
+  const areaValida = parseNumeroBR(imovel.areaImovel) > 0;
+  const podeContinuar = enderecoValido && areaValida;
+  const inputErroClass = " border-red-300 ring-1 ring-red-200 focus:border-red-400 focus:ring-red-200";
+
+  function handleContinuar() {
+    if (!podeContinuar) {
+      setMostrarErros(true);
+      return;
+    }
+    onProximo();
+  }
+
   return (
     <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
       <div className="xl:col-span-2 ui-card p-5 space-y-4">
         <div>
           <p className="text-sm font-semibold text-slate-900">Dados do imóvel</p>
-          <p className="text-xs text-slate-500 mt-1">Informe o CEP para preencher o endereço automaticamente.</p>
+          <p className="text-xs text-slate-500 mt-1">
+            Informe o CEP para preencher o endereço automaticamente. Campos com <span className="text-amber-600 font-semibold">*</span> são obrigatórios.
+          </p>
         </div>
         <div className="grid grid-cols-2 gap-3">
           <Campo label="CEP">
@@ -1840,13 +1976,24 @@ function EtapaImovel({ imovel, setImovel, onProximo, token, buscandoCep, erroCep
             </select>
           </Campo>
         </div>
-        <Campo label="Endereço (localização do imóvel)"><input value={imovel.endereco} onChange={(e) => set("endereco", e.target.value)} className={campoInputClass} /></Campo>
+        <Campo
+          label="Endereço (localização do imóvel)"
+          obrigatorio
+          erro={mostrarErros && !enderecoValido ? "Informe o endereço do imóvel." : null}
+        >
+          <input
+            value={imovel.endereco}
+            onChange={(e) => set("endereco", e.target.value)}
+            className={campoInputClass + (mostrarErros && !enderecoValido ? inputErroClass : "")}
+          />
+        </Campo>
         <div className="grid grid-cols-2 gap-3">
           <Campo label="Número"><input value={imovel.numero} onChange={(e) => set("numero", e.target.value)} className={campoInputClass} /></Campo>
           <Campo label="Complemento"><input value={imovel.complemento} onChange={(e) => set("complemento", e.target.value)} className={campoInputClass} /></Campo>
         </div>
         <Campo label="Matrícula do imóvel">
           <input value={imovel.matricula} onChange={(e) => set("matricula", e.target.value)} placeholder="Ex: 12.345 do 1º CRI de Belo Horizonte" className={campoInputClass} />
+          <p className="text-[11px] text-slate-400 mt-1.5">Opcional. Só o número da matrícula não preenche os demais campos — use o CEP ou informe manualmente. Para extrair dados, envie o PDF da certidão no Anexo I (etapa Relatório).</p>
         </Campo>
         <div className="grid grid-cols-3 gap-3">
           <Campo label="Bairro"><input value={imovel.bairro} onChange={(e) => set("bairro", e.target.value)} className={campoInputClass} /></Campo>
@@ -1854,7 +2001,18 @@ function EtapaImovel({ imovel, setImovel, onProximo, token, buscandoCep, erroCep
           <Campo label="Estado"><input value={imovel.estado} onChange={(e) => set("estado", e.target.value)} className={campoInputClass} maxLength={2} /></Campo>
         </div>
         <div className="grid grid-cols-2 gap-3">
-          <Campo label="Área do imóvel (m²)"><input value={imovel.areaImovel} onChange={(e) => set("areaImovel", e.target.value)} className={campoInputClass} /></Campo>
+          <Campo
+            label="Área do imóvel (m²)"
+            obrigatorio
+            erro={mostrarErros && !areaValida ? "Informe a área em m² (maior que zero)." : null}
+          >
+            <input
+              value={imovel.areaImovel}
+              onChange={(e) => set("areaImovel", e.target.value)}
+              placeholder="Ex: 70"
+              className={campoInputClass + (mostrarErros && !areaValida ? inputErroClass : "")}
+            />
+          </Campo>
           <Campo label="Área do terreno (m²) — quando aplicável"><input value={imovel.areaTerreno} onChange={(e) => set("areaTerreno", e.target.value)} className={campoInputClass} /></Campo>
         </div>
         <div className="grid grid-cols-3 gap-3">
@@ -1916,8 +2074,18 @@ function EtapaImovel({ imovel, setImovel, onProximo, token, buscandoCep, erroCep
         </div>
       </div>
 
-      <div className="xl:col-span-3 flex justify-end">
-        <button onClick={onProximo} disabled={salvando || !imovel.endereco || !(parseNumeroBR(imovel.areaImovel) > 0)} className={`flex items-center gap-2 ${ui.btnPrimary} px-5 disabled:opacity-50`}>
+      <div className="xl:col-span-3 flex flex-col items-end gap-2">
+        {!podeContinuar && !salvando && (
+          <p className="text-xs text-slate-500">
+            Para continuar, preencha{!enderecoValido ? " o endereço" : ""}{!enderecoValido && !areaValida ? " e" : ""}{!areaValida ? " a área do imóvel (m²)" : ""}.
+          </p>
+        )}
+        <button
+          type="button"
+          onClick={handleContinuar}
+          disabled={salvando}
+          className={`flex items-center gap-2 ${ui.btnPrimary} px-5 disabled:opacity-50`}
+        >
           {salvando ? <><Loader2 className="h-4 w-4 animate-spin" /> Salvando...</> : <>Continuar para comparáveis <ArrowRight className="h-4 w-4" /></>}
         </button>
       </div>
@@ -1977,7 +2145,7 @@ function ModalComparavel({ onClose, onSalvar, salvando, inicial = null, titulo =
   );
 }
 
-function EtapaComparaveis({ imovel, comparaveis, setComparaveis, onVoltar, onProximo, token, avaliacaoId, onAdicionarComparavel, onEditarComparavel, onRemoverComparavel, onGeocodificarComparaveis, onMoverComparavel, erroBusca, usageLimits, onUsageUpdate }) {
+function EtapaComparaveis({ imovel, comparaveis, setComparaveis, onVoltar, onProximo, token, avaliacaoId, onAdicionarComparavel, onEditarComparavel, onRemoverComparavel, onGeocodificarComparaveis, onMoverComparavel, erroBusca, usageLimits, onUsageUpdate, corDestaqueLaudo }) {
   const [modalAberto, setModalAberto] = useState(false);
   const [editandoId, setEditandoId] = useState(null);
   const [salvandoModal, setSalvandoModal] = useState(false);
@@ -2223,7 +2391,7 @@ function EtapaComparaveis({ imovel, comparaveis, setComparaveis, onVoltar, onPro
                 {geocodificando ? "Localizando..." : "Localizar amostras no mapa"}
               </button>
             </div>
-            <MapaCroquiComparaveis imovel={imovel} comparaveis={comparaveis} altura={360} />
+            <MapaCroquiComparaveis imovel={imovel} comparaveis={comparaveis} altura={360} corDestaque={corDestaqueLaudo} />
             <p className="text-[10px] text-slate-400 mt-1.5">Para corrigir a posição de uma amostra, use o ícone de mapa ao lado da lixeira na tabela.</p>
           </div>
         )}
@@ -2300,6 +2468,7 @@ function EtapaComparaveis({ imovel, comparaveis, setComparaveis, onVoltar, onPro
             indice={idx + 1}
             imovel={imovel}
             comparaveis={comparaveis}
+            corDestaque={corDestaqueLaudo}
             salvando={salvandoMapa}
             onClose={() => setMapaCompId(null)}
             onSalvar={async (lat, lng) => {
@@ -2533,14 +2702,17 @@ function comprimirImagem(file, maxLargura = 1600, qualidade = 0.72) {
   });
 }
 
-function PainelIdentidadeLaudo({ branding, onEnviarLogo, onEnviarTemplate, onToggleLogo, onToggleOcultarCabecalho, enviandoBranding, compact }) {
+function PainelIdentidadeLaudo({ branding, onEnviarLogo, onEnviarTemplate, onToggleLogo, onToggleOcultarCabecalho, onAlterarCorDestaque, enviandoBranding, compact }) {
   const inputLogoRef = useRef(null);
   const inputTemplateRef = useRef(null);
+  const corAtual = corLaudoEfetiva(branding);
+  const [corHexLocal, setCorHexLocal] = useState(corAtual);
+  useEffect(() => { setCorHexLocal(corAtual); }, [corAtual]);
   return (
     <div className={`rounded-xl border border-blue-200 bg-gradient-to-br from-blue-50/50 to-white p-5 print:hidden ${compact ? "" : ""}`}>
       <p className="text-sm font-semibold text-slate-900 mb-1">Identidade visual do laudo</p>
       <p className="text-xs text-slate-500 mb-4">
-        Logo e template Word (.docx) são aplicados na <strong>exportação</strong> (Word e PDF). A prévia abaixo mostra o conteúdo editável; o layout final segue seu template ao baixar.
+        Logo e template Word (.docx) valem para todos os laudos da imobiliária. São aplicados ao <strong>Gerar Word</strong> e <strong>Gerar PDF</strong> na etapa Relatório.
       </p>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="rounded-lg border border-slate-200 bg-white p-4 space-y-3">
@@ -2596,6 +2768,30 @@ function PainelIdentidadeLaudo({ branding, onEnviarLogo, onEnviarTemplate, onTog
           </div>
           <input ref={inputTemplateRef} type="file" accept=".pdf,.doc,.docx" className="hidden"
             onChange={(e) => { if (e.target.files?.[0]) onEnviarTemplate(e.target.files[0]); e.target.value = ""; }} />
+        </div>
+      </div>
+      <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4 space-y-3">
+        <p className="text-xs font-semibold text-slate-600">Cor de destaque do laudo</p>
+        <p className="text-[11px] text-slate-500">
+          Usada no sumário, gráficos, pontos das amostras no mapa satélite e detalhes da prévia. No template Word avançado, use <code className="text-[10px] bg-slate-100 px-1 rounded">{"{{ cor_destaque_laudo }}"}</code>.
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          {CORES_LAUDO_SUGERIDAS.map((cor) => (
+            <button key={cor} type="button" title={cor} disabled={enviandoBranding}
+              onClick={() => onAlterarCorDestaque?.(cor)}
+              className={`h-8 w-8 rounded-full border-2 transition-transform hover:scale-105 cursor-pointer disabled:opacity-50 ${corAtual === cor ? "border-slate-900 ring-2 ring-offset-1 ring-slate-400" : "border-white shadow-sm"}`}
+              style={{ backgroundColor: cor }} />
+          ))}
+        </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <input type="color" value={corAtual} disabled={enviandoBranding}
+            onChange={(e) => onAlterarCorDestaque?.(normalizarCorLaudo(e.target.value))}
+            className="h-10 w-14 rounded border border-slate-200 bg-white cursor-pointer disabled:opacity-50" />
+          <input type="text" value={corHexLocal} maxLength={7} disabled={enviandoBranding}
+            onChange={(e) => { const v = e.target.value; if (/^#[0-9A-Fa-f]{0,6}$/.test(v)) setCorHexLocal(v.toUpperCase()); }}
+            onBlur={() => onAlterarCorDestaque?.(normalizarCorLaudo(corHexLocal))}
+            className={`w-28 ${campoInputClass} font-mono text-xs uppercase disabled:opacity-50`} />
+          <span className="text-[11px] font-bold uppercase tracking-wide" style={{ color: corAtual }}>SUMÁRIO · gráficos</span>
         </div>
       </div>
     </div>
@@ -2976,8 +3172,91 @@ function valorPorExtenso(v) {
   return numeroPorExtenso(n) + (soMilhoes ? " de reais" : " reais");
 }
 
+function paginasPorExtenso(valor) {
+  const n = parseInt(String(valor || "").replace(/\D/g, ""), 10);
+  if (!n || n < 1) return "[número por extenso]";
+  return numeroPorExtenso(n);
+}
+
+function curriculoFromPerfil(p) {
+  const url = p?.curriculo_arquivo_url ? `${API_BASE}${p.curriculo_arquivo_url}` : null;
+  return {
+    formacao: p?.curriculo_formacao || "",
+    experiencia: p?.curriculo_experiencia || "",
+    arquivoUrl: url,
+    arquivoNome: p?.curriculo_arquivo_nome || "",
+    ehPdf: !!url,
+  };
+}
+
+function curriculoTemConteudo(c) {
+  if (!c) return false;
+  if (c.arquivoUrl) return true;
+  return !!(c.formacao?.trim() || c.experiencia?.trim());
+}
+
+function quesitosFromApi(dados) {
+  const url = dados?.quesitos_arquivo_url ? `${API_BASE}${dados.quesitos_arquivo_url}` : null;
+  return {
+    incluir: !!dados?.incluir_anexo_quesitos,
+    texto: dados?.respostas_quesitos || "",
+    arquivoUrl: url,
+    arquivoNome: dados?.quesitos_arquivo_nome || "",
+    ehPdf: !!url,
+  };
+}
+
+function quesitosTemConteudo(q) {
+  if (!q) return false;
+  if (q.arquivoUrl) return true;
+  return !!(q.texto?.trim());
+}
+
+function linhasCurriculo(texto) {
+  return (texto || "").split("\n").map((l) => l.trim()).filter(Boolean);
+}
+
+function estimarPaginasLaudo(laudo, fotos, documentos, curriculo) {
+  let n = 14;
+  if (laudo.documentoJudicial) n += 1;
+  if ((fotos?.length || 0) > 6) n += Math.ceil((fotos.length - 6) / 6);
+  if ((documentos?.length || 0) > 0) n += 1 + documentos.length;
+  if (laudo.incluirAnexoCurriculo !== false && curriculoTemConteudo(curriculo)) n += 2;
+  return n;
+}
+
 function aplicarVariaveis(texto, vars) {
   return (texto || "").replace(/\{\{(\w+)\}\}/g, (_, k) => (vars[k] !== undefined ? vars[k] : ""));
+}
+
+const ESTADOS_NOME = {
+  AC: "Acre", AL: "Alagoas", AP: "Amapá", AM: "Amazonas", BA: "Bahia", CE: "Ceará",
+  DF: "Distrito Federal", ES: "Espírito Santo", GO: "Goiás", MA: "Maranhão",
+  MT: "Mato Grosso", MS: "Mato Grosso do Sul", MG: "Minas Gerais", PA: "Pará",
+  PB: "Paraíba", PR: "Paraná", PE: "Pernambuco", PI: "Piauí", RJ: "Rio de Janeiro",
+  RN: "Rio Grande do Norte", RS: "Rio Grande do Sul", RO: "Rondônia", RR: "Roraima",
+  SC: "Santa Catarina", SP: "São Paulo", SE: "Sergipe", TO: "Tocantins",
+};
+
+function nomeEstado(uf) {
+  const chave = (uf || "").trim().toUpperCase();
+  return ESTADOS_NOME[chave] || uf || "[estado]";
+}
+
+function textoLaudoEfetivo(textos, chave) {
+  const salvo = (textos?.[chave] || "").trim();
+  if (salvo) return textos[chave];
+  const padrao = DEFAULT_TEXTOS[chave];
+  return (padrao || "").trim() ? padrao : "";
+}
+
+function textosLaudoEfetivos(laudo) {
+  const textos = laudo?.textos || {};
+  const chaves = new Set([...Object.keys(DEFAULT_TEXTOS), ...Object.keys(textos)]);
+  return Object.fromEntries([...chaves].map((chave) => {
+    if (chave === "metodologia") return [chave, textoMetodologia(laudo)];
+    return [chave, textoLaudoEfetivo(textos, chave)];
+  }));
 }
 
 function qualificacaoLaudoDefault(creci, cnai, qualificacaoCustom) {
@@ -2987,11 +3266,27 @@ function qualificacaoLaudoDefault(creci, cnai, qualificacaoCustom) {
   return `${partes.join(", ")}, conforme Resolução COFECI n.º 1066/2007 e Ato Normativo COFECI n.º 001/2011 para emitir Parecer Técnico de Avaliação Mercadológica.`;
 }
 
+function pontoFundamentacaoNum(p, item) {
+  const n = Number(p[item]);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function formatPontoFundamentacao(v) {
+  if (v == null || v === "") return "";
+  const n = typeof v === "number" ? v : parseNumeroBR(v);
+  if (!Number.isFinite(n)) return String(v);
+  return n.toLocaleString("pt-BR", { maximumFractionDigits: 2, minimumFractionDigits: 0 });
+}
+
 function grauFundamentacao(p) {
-  const total = p[1] + p[2] + p[3] + p[4];
-  if (total >= 10 && p[2] >= 3 && p[4] >= 3 && p[1] >= 2 && p[3] >= 2) return { total, grau: "III" };
-  if (total >= 6 && p[2] >= 2 && p[4] >= 2 && p[1] >= 1 && p[3] >= 1) return { total, grau: "II" };
-  if (total >= 4 && p[1] >= 1 && p[2] >= 1 && p[3] >= 1 && p[4] >= 1) return { total, grau: "I" };
+  const p1 = pontoFundamentacaoNum(p, 1);
+  const p2 = pontoFundamentacaoNum(p, 2);
+  const p3 = pontoFundamentacaoNum(p, 3);
+  const p4 = pontoFundamentacaoNum(p, 4);
+  const total = p1 + p2 + p3 + p4;
+  if (total >= 10 && p2 >= 3 && p4 >= 3 && p1 >= 2 && p3 >= 2) return { total, grau: "III" };
+  if (total >= 6 && p2 >= 2 && p4 >= 2 && p1 >= 1 && p3 >= 1) return { total, grau: "II" };
+  if (total >= 4 && p1 >= 1 && p2 >= 1 && p3 >= 1 && p4 >= 1) return { total, grau: "I" };
   return { total, grau: "—" };
 }
 
@@ -3129,6 +3424,43 @@ function tituloLaudoCapa(laudo) {
   return `LAUDO TÉCNICO DE AVALIAÇÃO\nMERCADOLÓGICA DE IMÓVEL ${natureza}`;
 }
 
+const METODOLOGIA_TITULOS = {
+  comparativo: "Método Comparativo Direto de Dados",
+  evolutivo: "Método Evolutivo",
+};
+
+const METODOLOGIA_PADRAO = {
+  comparativo: `Para determinação do {{valorTipo}}, utilizou-se o Método Comparativo Direto de Dados. Tal método estabelece de forma direta um sistema de comparação com imóveis similares, através da coleta de dados em pesquisa junto a imobiliárias, profissionais especializados, proprietários, anúncios classificados, órgãos públicos e outros veículos que possam fornecer informações básicas e concretas dos imóveis ofertados ou vendidos recentemente.
+
+A similaridade dos imóveis pesquisados é de fundamental importância para que tenhamos elementos que possam ser comparados de forma direta.
+
+O processo comparativo, muito embora a pesquisa abranja imóveis similares em tamanho, padrão e local, requer uma melhoria no seu grau de precisão, obtida por outro processo auxiliar, denominado Homogeneização de Valores. Tal processo, recomendado por normas técnicas, visa corrigir as discrepâncias dos elementos comparativos, através de fatores cuja aplicação de um ou outro depende de cada caso. Assim, os fatores fundamentais, como: localização, atualização, fonte, padrão construtivo, idade e conservação, etc., são levados em conta para que os elementos sejam mais comparáveis, não obstante a similaridade já pré-selecionada na pesquisa.
+
+O método comparativo, dado as características do imóvel em questão e pela viabilidade de sua aplicação ao caso, é o que mais se ajusta para a determinação do {{valorTipo}}.
+
+Para melhorar ainda mais a precisão, após o processo de homogeneização, a média obtida passa por processo de saneamento de valores que eventualmente situam-se muito distantes do seu valor médio, distorcendo o valor unitário. Em geral, utiliza-se um intervalo de confiança, eliminando-se os valores fora deste intervalo e recalculando-se a nova média (média saneada). Assim, o valor unitário obtido pode ser considerado como o real {{valorTipo}}.
+
+Justificativa da metodologia: dentro da região de influência na qual se insere o imóvel foi possível identificar uma amostragem em tamanho suficiente para se obter um valor médio confiável. Tal fato nos levou à aplicação do método comparativo, com maior precisão para o caso em questão.`,
+
+  evolutivo: `Para determinação do {{valorTipo}}, utilizou-se o Método Evolutivo, conforme preconiza a NBR 14.653 e as práticas consolidadas pelo IBAPE.
+
+O método evolutivo determina o valor do imóvel pela soma do custo de reprodução ou reposição da edificação, depreciada por idade, estado de conservação e obsolescências, acrescido do valor do terreno, quando for o caso. A depreciação física foi considerada mediante o método Ross-Heidecke, tendo em vista a idade aparente e o estado de conservação verificados em vistoria.
+
+O custo unitário básico de construção foi obtido por meio de tabelas e boletins técnicos de referência (como CUB/SINAPI ou equivalente regional), aplicados ao padrão construtivo e às características do imóvel avaliando.
+
+Justificativa da metodologia: diante das peculiaridades do imóvel avaliando e da necessidade de refletir a formação de custo do bem edificado, optou-se pelo método evolutivo, por ser o mais adequado à determinação do {{valorTipo}} no presente caso.`,
+};
+
+function metodoAvaliacaoAtual(laudo) {
+  return laudo?.metodoAvaliacao === "evolutivo" ? "evolutivo" : "comparativo";
+}
+
+function textoMetodologia(laudo) {
+  const salvo = (laudo?.textos?.metodologia || "").trim();
+  if (salvo) return laudo.textos.metodologia;
+  return METODOLOGIA_PADRAO[metodoAvaliacaoAtual(laudo)] || METODOLOGIA_PADRAO.comparativo;
+}
+
 const DEFAULT_TEXTOS = {
   introducao: `O presente {{tituloLaudo}} tem por finalidade atender à solicitação de {{solicitante}}, com o objetivo de {{objetivo}} do {{imovel}}.
 
@@ -3136,15 +3468,15 @@ O laudo é assinado por {{avaliador}}, {{qualificacao}}.
 
 Entende-se por “PTAM - Parecer Técnico de Avaliação Mercadológica” o documento no qual é apresentada, com base em critérios técnicos, uma análise de mercado com vistas à determinação do valor de comercialização de um imóvel, judicial ou extrajudicialmente, observando-se o disposto na Resolução COFECI n.º 1.066/07, que está em consonância com a NBR 14.653 e recomendações de associações de classe como o IBAPE - Instituto Brasileiro de Avaliações e Perícias de Engenharia.`,
 
-  premissas: `As análises, opiniões e conclusões expressas no presente trabalho são baseadas em dados, diligências, vistorias e levantamentos realizados pelo profissional responsável em todos os locais, região e cidade em que se situa o imóvel avaliando.
+  premissas: `As análises, opiniões e conclusões apresentadas neste trabalho fundamentam-se nos dados disponíveis, nas diligências realizadas, nas vistorias efetuadas e nos levantamentos e pesquisas pertinentes ao imóvel avaliando, à sua região e ao mercado imobiliário local, observadas as condições verificadas na data de referência da avaliação.
 
-Considerou-se que a certidão da matrícula do imóvel, títulos, documentos, informações, pesquisas e consultas são verdadeiras, estão corretas, não tendo sido efetuadas investigações em relação a defeitos ou irregularidades nos mesmos, não assumindo o perito responsabilidades sobre a matéria legal que não sejam as implícitas ao exercício de suas funções, estabelecidas em códigos, leis e regulamentos.
+Para a elaboração deste laudo, foram consideradas autênticas e corretas as informações constantes da certidão de matrícula, dos títulos e demais documentos disponibilizados, bem como as informações obtidas por meio de pesquisas e consultas realizadas. Não foram conduzidas investigações específicas destinadas à identificação de eventuais vícios, irregularidades documentais ou questões de natureza jurídica, ressalvadas aquelas expressamente indicadas neste trabalho. A responsabilidade do profissional limita-se ao âmbito técnico de sua atuação, nos termos da legislação e das normas profissionais aplicáveis.
 
-A determinação do {{valorTipo}} do imóvel não tem vinculação, relação, limitação e expectativas em relação aos honorários arbitrados pelo profissional responsável pela elaboração deste laudo.
+A determinação do {{valorTipo}} do imóvel foi realizada com base nos critérios técnicos e metodológicos adotados neste laudo, sem vinculação aos honorários profissionais estabelecidos para sua elaboração.
 
-Finalmente, declaro peremptoriamente que não tenho no presente, nem contemplo para o futuro, interesse algum no bem avaliado, e não há qualquer outra circunstância relevante que caracterize conflito de interesses.
+O profissional responsável declara não possuir, na presente data, interesse pessoal ou econômico no imóvel avaliando que possa comprometer sua independência e imparcialidade, tampouco ter conhecimento de circunstâncias que caracterizem conflito de interesses em relação ao objeto da avaliação.
 
-Determino também que os resultados, em especial o {{valorTipo}} e comentários, são considerados sigilosos, sendo que as informações ou cópias somente serão fornecidas com expressa autorização do solicitante.`,
+As informações e os resultados apresentados neste laudo destinam-se à finalidade para a qual o trabalho foi contratado. Sua divulgação, reprodução ou utilização para finalidade diversa deverá observar as condições acordadas com o solicitante, a legislação aplicável e os deveres de confidencialidade pertinentes.`,
 
   resultados: `Esta análise visa condensar de forma objetiva o trabalho executado enfocando o imóvel avaliando, na realidade do mercado imobiliário macrorregional em que o mesmo se encontra.
 
@@ -3153,21 +3485,13 @@ O {{valorTipo}} de um bem pressupõe uma situação em que as partes interessada
   documentacao: "",
   vistoria: "",
   adequacao: "",
-  localizacao: "",
+  localizacao: `O imóvel avaliando ({{tipoImovel}}) está localizado na {{endereco}}, n.º {{numero}}{{complementoSuffix}}, no bairro de {{bairro}}, no município de {{cidade}}, no Estado de {{estadoNome}}.`,
   mercadoAtual: "",
   perspectivas: "",
 
   valoresResultantes: `Os valores resultantes encontram-se dentro da média pesquisada, quando considerados todos os fatores que influenciam na sua formação.`,
 
-  metodologia: `Para determinação do {{valorTipo}}, utilizou-se o Método Comparativo Direto de Dados. Tal método estabelece de forma direta um sistema de comparação com imóveis similares, através da coleta de dados em pesquisa junto a imobiliárias, profissionais especializados, proprietários, anúncios classificados, órgãos públicos e outros veículos que possam fornecer informações básicas e concretas dos imóveis ofertados ou vendidos recentemente.
-
-A similaridade dos imóveis pesquisados é de fundamental importância para que tenhamos elementos que possam ser comparados de forma direta.
-
-O processo comparativo, muito embora a pesquisa abranja imóveis similares em tamanho, padrão e local, requer uma melhoria no seu grau de precisão, obtida por outro processo auxiliar, denominado Homogeneização de Valores. Tal processo, recomendado por normas técnicas, visa corrigir as discrepâncias dos elementos comparativos, através de fatores cuja aplicação de um ou outro depende de cada caso. Assim, os fatores fundamentais, como: localização, atualização, fonte, padrão construtivo, idade e conservação, etc., são levados em conta para que os elementos sejam mais comparáveis, não obstante a similaridade já pré-selecionada na pesquisa.
-
-Para melhorar ainda mais a precisão, após o processo de homogeneização, a média obtida passa por processo de saneamento de valores que eventualmente situam-se muito distantes do seu valor médio, distorcendo o valor unitário. Em geral, utiliza-se um intervalo de confiança, eliminando-se os valores fora deste intervalo e recalculando-se a nova média (média saneada). Assim, o valor unitário obtido pode ser considerado como o real {{valorTipo}}.
-
-Justificativa da metodologia: dentro da região de influência na qual se insere o imóvel foi possível identificar uma amostragem em tamanho suficiente para se obter um valor médio confiável. Tal fato nos levou à aplicação do método comparativo, com maior precisão para o caso em questão.`,
+  metodologia: METODOLOGIA_PADRAO.comparativo,
 
   homogeneizacao: `Concluída a pesquisa de ofertas de imóveis semelhantes faz-se necessária a aplicação do processo denominado homogeneização de valores. Tal processo consiste basicamente na aplicação de diversos fatores objetivando tornar as pesquisas mais comparáveis ao imóvel avaliando, pois por mais semelhantes que sejam sempre apresentam algumas diferenças com relação ao imóvel que na maioria das vezes é adotado como paradigma de comparação.
 
@@ -3195,25 +3519,49 @@ Fator Testada: permite homogeneizar os valores unitários em relação às testa
 
 A seguir apresentamos as tabelas que, segundo a NBR 14.653 – Parte 2, definem os graus de fundamentação e precisão deste laudo de avaliação:`,
 
-  encerramento: `O presente laudo técnico de avaliação é assinado pelo profissional que subscreve esta última.`,
+  encerramento: `O presente laudo técnico de avaliação é composto de {{numPaginas}} ({{numPaginasExtenso}}) páginas, todas de um só lado, e assinado pelo profissional que subscreve esta última.`,
+};
+
+const JUDICIAL_INICIAL = {
+  destinatario: "",
+  autor: "",
+  reu: "",
+  assunto: "",
+  rg: "",
+  cpf: "",
+  creciInscricaoData: "",
+  creciRegiao: "4.ª Região / MG",
 };
 
 const LAUDO_INICIAL = {
   solicitante: "Proprietário do imóvel",
   processo: "",
+  documentoJudicial: false,
+  judicial: { ...JUDICIAL_INICIAL },
   naturezaImovel: "urbano",
   finalidade: "venda",
   local: "Belo Horizonte",
   data: new Date().toISOString().slice(0, 10),
-  perita: "",
+  nomeProfissional: "",
   tituloProfissional: "",
   qualificacaoLaudo: "",
   creci: "",
   cnai: "",
   valorAdotado: "",
+  numPaginas: "",
+  incluirAnexoCurriculo: true,
+  metodoAvaliacao: "comparativo",
   pontos: {},
   textos: DEFAULT_TEXTOS,
 };
+
+function textoApresentacaoJudicial(laudo) {
+  const j = laudo.judicial || JUDICIAL_INICIAL;
+  const nome = laudo.nomeProfissional || "[nome do profissional]";
+  const creci = laudo.creci || "[CRECI]";
+  const cnai = laudo.cnai || "[CNAI]";
+  return `${nome}, portador(a) do RG n.º ${j.rg || "[RG]"} e CPF n.º ${j.cpf || "[CPF]"}, corretor(a) de imóveis devidamente registrado(a) no ${creci}, inscrito(a) em ${j.creciInscricaoData || "[data]"} no CRECI da ${j.creciRegiao || "4.ª Região / MG"}, registrado(a) perante o Cadastro Nacional de Avaliadores Imobiliários (CNAI) sob o n.º ${cnai}, avaliador(a) habilitado(a) conforme a Resolução COFECI nº 1066/2007 e o Ato Normativo COFECI nº 001/2011 para emitir Parecer Técnico de Avaliação Mercadológica de bens móveis e de bens imóveis e suas parcelas, ativo(a) com perícias judiciais na especialidade mercado, perito(a) nomeado(a) por V. Exa., apresenta, conclusivamente, depois das diligências e vistorias realizadas, o resultado da Avaliação Mercadológica do imóvel supramencionado.`;
+}
 
 function laudoInicialFromPerfil(perfil) {
   if (!perfil) return { ...LAUDO_INICIAL, textos: { ...DEFAULT_TEXTOS } };
@@ -3222,7 +3570,7 @@ function laudoInicialFromPerfil(perfil) {
   return {
     ...LAUDO_INICIAL,
     textos: { ...DEFAULT_TEXTOS },
-    perita: perfil.nome || "",
+    nomeProfissional: perfil.nome || "",
     tituloProfissional: perfil.titulo_profissional || "",
     qualificacaoLaudo: qualificacaoLaudoDefault(creci, cnai, perfil.qualificacao_laudo),
     creci,
@@ -3247,6 +3595,30 @@ function Paragrafos({ texto, vars }) {
   );
 }
 
+function PaginaJudicialLaudo({ laudo, branding, dataLonga }) {
+  const j = laudo.judicial || JUDICIAL_INICIAL;
+  return (
+    <LaudoPagina laudo={laudo} branding={branding}>
+      <p className="text-[13px] font-bold text-center leading-snug uppercase mb-8">
+        {j.destinatario || "EXCELENTÍSSIMO SENHOR DOUTOR JUIZ DE DIREITO DA ___ª VARA ___ DA COMARCA DE ___ - ESTADO DE ___."}
+      </p>
+      <div className="text-[13px] text-slate-800 space-y-1 mb-8 max-w-lg">
+        <p className="font-bold">REFERÊNCIA:</p>
+        <p><strong>Processo:</strong> n.º {laudo.processo || "[número do processo]"}</p>
+        <p><strong>Autor:</strong> {j.autor || "[autor]"}</p>
+        <p><strong>Réu:</strong> {j.reu || "[réu]"}</p>
+        <p><strong>Assunto:</strong> {j.assunto || "[assunto]"}</p>
+      </div>
+      <p className="text-[13px] text-slate-800 leading-relaxed text-justify mb-10">
+        {textoApresentacaoJudicial(laudo)}
+      </p>
+      <p className="text-[13px] text-slate-800 text-center">
+        {laudo.local || "[cidade]"}, {dataLonga}.
+      </p>
+    </LaudoPagina>
+  );
+}
+
 function LaudoPagina({ laudo, branding, children }) {
   const ocultarCabecalho = branding?.ocultarCabecalhoLaudo;
   const mostrarLogo = !ocultarCabecalho && branding?.exibirLogoLaudo && branding?.logoUrl;
@@ -3258,7 +3630,7 @@ function LaudoPagina({ laudo, branding, children }) {
             <img src={branding.logoUrl} alt="Logo da imobiliária" className="h-16 max-w-[220px] object-contain object-left" />
           ) : (
             <div>
-              <p className="text-sm font-bold tracking-wide text-slate-900 uppercase">{laudo.perita || "Nome do profissional"}</p>
+              <p className="text-sm font-bold tracking-wide text-slate-900 uppercase">{laudo.nomeProfissional || "Nome do profissional"}</p>
               {laudo.tituloProfissional && (
                 <p className="text-[10px] text-slate-500 mt-0.5">{laudo.tituloProfissional}</p>
               )}
@@ -3306,7 +3678,8 @@ function FichaLinha({ rotulo, valor }) {
   );
 }
 
-function GraficoUnitarios({ linhas, media, minimo, maximo }) {
+function GraficoUnitarios({ linhas, media, minimo, maximo, corDestaque = COR_LAUDO_PADRAO }) {
+  const corBarra = corLaudoEfetiva({ corDestaqueLaudo: corDestaque });
   const W = 560;
   const H = 220;
   const pad = { l: 46, r: 12, t: 14, b: 28 };
@@ -3325,7 +3698,7 @@ function GraficoUnitarios({ linhas, media, minimo, maximo }) {
       ))}
       {linhas.map((l, i) => (
         <g key={l.n}>
-          <rect x={pad.l + i * bw + bw * 0.2} y={y(l.homogeneizado)} width={bw * 0.6} height={H - pad.b - y(l.homogeneizado)} fill={l.saneado ? "#f59e0b" : "#d1d5db"} />
+          <rect x={pad.l + i * bw + bw * 0.2} y={y(l.homogeneizado)} width={bw * 0.6} height={H - pad.b - y(l.homogeneizado)} fill={l.saneado ? corBarra : "#d1d5db"} />
           <text x={pad.l + i * bw + bw / 2} y={H - pad.b + 14} fontSize="10" textAnchor="middle" fill="#374151">{l.n}</text>
         </g>
       ))}
@@ -3337,14 +3710,50 @@ function GraficoUnitarios({ linhas, media, minimo, maximo }) {
   );
 }
 
-function EtapaRelatorio({ imovel, comparaveis, fotos, laudo, setLaudo, setImovel, onVoltar, branding, onEnviarLogo, onEnviarTemplate, onToggleLogo, onToggleOcultarCabecalho, enviandoBranding, onGerarWord, onGerarPdf, gerandoWord, gerandoPdf }) {
+function PaginaCurriculoTexto({ curriculo }) {
+  const formacao = linhasCurriculo(curriculo.formacao);
+  const experiencia = linhasCurriculo(curriculo.experiencia);
+  return (
+    <div className="text-[12px] text-slate-800 leading-relaxed">
+      {formacao.length > 0 && (
+        <div className="mb-6">
+          <p className="text-[13px] font-bold text-slate-900 mb-2">• Formação Profissional</p>
+          <ul className="space-y-1.5">
+            {formacao.map((item, i) => (
+              <li key={i}>{item.endsWith(";") ? item : `${item};`}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {experiencia.length > 0 && (
+        <div>
+          <p className="text-[13px] font-bold text-slate-900 mb-2">• Experiência Profissional</p>
+          <ul className="space-y-1.5">
+            {experiencia.map((item, i) => (
+              <li key={i}>{item}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EtapaRelatorio({ imovel, comparaveis, fotos, documentos, onEnviarDocumento, onRemoverDocumento, enviandoDocumento, quesitos, onToggleIncluirQuesitos, onSalvarTextoQuesitos, onEnviarQuesitosPdf, onRemoverQuesitosPdf, enviandoQuesitosPdf, laudo, setLaudo, setImovel, token, avaliacaoId, onVoltar, branding, onGerarWord, onGerarPdf, gerandoWord, gerandoPdf }) {
   const [editando, setEditando] = useState(false);
+  const [gerandoPerspectivas, setGerandoPerspectivas] = useState(false);
+  const [erroPerspectivas, setErroPerspectivas] = useState(null);
+  const [curriculo, setCurriculo] = useState(null);
+  const [textoQuesitosLocal, setTextoQuesitosLocal] = useState("");
+  const [pontoEditando, setPontoEditando] = useState(null);
+  const [pontoTexto, setPontoTexto] = useState("");
+  const perspectivasIniciadasRef = useRef(false);
   const ehLocacao = laudo.finalidade === "locacao";
   const calc = useMemo(() => calcularLaudo(imovel, comparaveis), [imovel, comparaveis]);
   const san = calc.saneamento;
 
   const valorArredondado = Math.round(calc.valorCalculado / 10) * 10;
-  const valorFinal = laudo.valorAdotado ? Number(String(laudo.valorAdotado).replace(/\D/g, "")) : valorArredondado;
+  const valorFinal = valorMoedaBR(laudo.valorAdotado, valorArredondado);
   const sufixoUnid = ehLocacao ? " mês" : "";
   const extenso = valorPorExtenso(valorFinal).toUpperCase() + (ehLocacao ? " POR MÊS" : "");
 
@@ -3358,6 +3767,8 @@ function EtapaRelatorio({ imovel, comparaveis, fotos, laudo, setLaudo, setImovel
   const grauPrec = grauPrecisao(san.intervalo);
 
   const complemento = imovel.complemento ? ", " + imovel.complemento : "";
+  const complementoSuffix = imovel.complemento ? `, ${imovel.complemento}` : "";
+  const dataLonga = new Date(laudo.data + "T12:00:00").toLocaleDateString("pt-BR", { day: "numeric", month: "long", year: "numeric" });
   const vars = {
     solicitante: laudo.solicitante || "[solicitante]",
     objetivo: ehLocacao ? "determinar o valor de locação mensal" : "determinar o valor de mercado",
@@ -3366,8 +3777,8 @@ function EtapaRelatorio({ imovel, comparaveis, fotos, laudo, setLaudo, setImovel
     parteB: ehLocacao ? "locador" : "vendedor",
     negocio: ehLocacao ? "a locação" : "a venda",
     imovel: `imóvel (${(imovel.tipo || "").toLowerCase()}) situado em ${imovel.endereco}, nº ${imovel.numero}${complemento}, ${imovel.bairro}, ${imovel.cidade}/${imovel.estado}`,
-    perita: laudo.perita,
-    avaliador: laudo.perita,
+    avaliador: laudo.nomeProfissional,
+    profissional: laudo.nomeProfissional,
     tituloProfissional: laudo.tituloProfissional || "",
     qualificacao: laudo.qualificacaoLaudo || qualificacaoLaudoDefault(laudo.creci, laudo.cnai),
     creci: laudo.creci,
@@ -3376,29 +3787,153 @@ function EtapaRelatorio({ imovel, comparaveis, fotos, laudo, setLaudo, setImovel
       ? `Laudo Técnico de Avaliação de Locação de Imóvel ${laudo.naturezaImovel === "rural" ? "Rural" : "Urbano"}`
       : `Laudo Técnico de Avaliação Mercadológica de Imóvel ${laudo.naturezaImovel === "rural" ? "Rural" : "Urbano"}`,
     matricula: imovel.matricula || "",
+    tipoImovel: (imovel.tipo || "imóvel").toLowerCase(),
+    endereco: imovel.endereco || "[endereço]",
+    numero: imovel.numero || "s/n",
+    complementoSuffix,
+    bairro: imovel.bairro || "[bairro]",
+    cidade: imovel.cidade || "[cidade]",
+    estadoNome: nomeEstado(imovel.estado),
+    numPaginas: laudo.numPaginas || "[nº de páginas]",
+    numPaginasExtenso: paginasPorExtenso(laudo.numPaginas),
+    dataLonga,
+    local: laudo.local || "[local]",
   };
 
   const matriculaExibida = imovel.matricula || "";
 
-  const dataLonga = new Date(laudo.data + "T12:00:00").toLocaleDateString("pt-BR", { day: "numeric", month: "long", year: "numeric" });
   const mesAno = new Date(laudo.data + "T12:00:00").toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
   const fotoCapa = fotos.find((f) => f.categoria === "Fachada") || fotos[0];
 
   const setCampo = (campo, valor) => setLaudo((l) => ({ ...l, [campo]: valor }));
+  const setJudicial = (campo, valor) => setLaudo((l) => ({ ...l, judicial: { ...(l.judicial || JUDICIAL_INICIAL), [campo]: valor } }));
   const setTexto = (chave, valor) => setLaudo((l) => ({ ...l, textos: { ...l.textos, [chave]: valor } }));
-  const setPonto = (item, valor) => setLaudo((l) => ({ ...l, pontos: { ...l.pontos, [item]: Number(valor) } }));
+  function setPonto(item, valor) {
+    const trimmed = String(valor ?? "").trim();
+    setLaudo((l) => {
+      const next = { ...l.pontos };
+      if (!trimmed) {
+        delete next[item];
+        return { ...l, pontos: next };
+      }
+      const n = parseNumeroBR(trimmed);
+      if (Number.isFinite(n) && n >= 0) next[item] = n;
+      return { ...l, pontos: next };
+    });
+  }
+
+  function iniciarEdicaoPonto(item, valorAtual) {
+    setPontoEditando(item);
+    setPontoTexto(formatPontoFundamentacao(valorAtual));
+  }
+
+  function finalizarEdicaoPonto(item) {
+    setPonto(item, pontoTexto);
+    setPontoEditando(null);
+    setPontoTexto("");
+  }
+  const metodoAtual = metodoAvaliacaoAtual(laudo);
+
+  function setMetodoAvaliacao(metodo) {
+    if (metodo !== "comparativo" && metodo !== "evolutivo") return;
+    setLaudo((l) => ({
+      ...l,
+      metodoAvaliacao: metodo,
+      textos: { ...l.textos, metodologia: METODOLOGIA_PADRAO[metodo] },
+    }));
+  }
+
+  function textoTemVariaveis(texto) {
+    return /\{\{\w+\}\}/.test(texto || "");
+  }
+
+  function textoParaEditor(texto) {
+    if (!texto?.trim()) return "";
+    return textoTemVariaveis(texto) ? aplicarVariaveis(texto, vars) : texto;
+  }
+
+  async function gerarPerspectivasIA(forcar = false) {
+    if (!token || !avaliacaoId || gerandoPerspectivas) return;
+    const atual = (laudo.textos.perspectivas || "").trim();
+    if (atual && !forcar) return;
+
+    setGerandoPerspectivas(true);
+    setErroPerspectivas(null);
+    try {
+      const resp = await apiAvaliacoes(token, `/${avaliacaoId}/ia/texto-laudo`, {
+        method: "POST",
+        body: JSON.stringify({
+          tipo: "perspectivas",
+          finalidade: laudo.finalidade || "venda",
+          texto_atual: forcar ? atual : "",
+          valor_estimado: valorFinal,
+        }),
+      });
+      setTexto("perspectivas", resp.texto);
+    } catch (err) {
+      setErroPerspectivas(err.message);
+    } finally {
+      setGerandoPerspectivas(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!token || !avaliacaoId || perspectivasIniciadasRef.current) return;
+    if ((laudo.textos.perspectivas || "").trim()) return;
+    perspectivasIniciadasRef.current = true;
+    gerarPerspectivasIA(false);
+  }, [token, avaliacaoId, laudo.textos.perspectivas]);
+
+  useEffect(() => {
+    if (!token) return;
+    fetch(`${API_BASE}/auth/me`, { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((p) => { if (p) setCurriculo(curriculoFromPerfil(p)); })
+      .catch(() => {});
+  }, [token]);
+
+  useEffect(() => {
+    setTextoQuesitosLocal(quesitos?.texto || "");
+  }, [quesitos?.texto]);
+
+  useEffect(() => {
+    if (laudo.numPaginas) return;
+    const est = estimarPaginasLaudo(laudo, fotos, documentos, curriculo, quesitos);
+    setLaudo((l) => (l.numPaginas ? l : { ...l, numPaginas: String(est) }));
+  }, [fotos.length, documentos.length, laudo.documentoJudicial, laudo.incluirAnexoCurriculo, curriculo, quesitos?.incluir, quesitos?.texto, quesitos?.arquivoUrl]);
 
   // Função (e não componente) para não perder o foco do textarea a cada tecla.
-  const bloco = (chave, placeholder, rows) => {
-    const texto = laudo.textos[chave] || "";
+  const bloco = (chave, placeholder, rows, opts = {}) => {
+    const textoBruto = chave === "metodologia" ? textoMetodologia(laudo) : textoLaudoEfetivo(laudo.textos, chave);
+    const usaModeloAutomatico = textoTemVariaveis(textoBruto);
+    const textoRestauravel = chave === "metodologia"
+      ? METODOLOGIA_PADRAO[metodoAtual]
+      : DEFAULT_TEXTOS[chave];
     if (editando) {
       return (
-        <textarea key={chave} value={texto} rows={rows || 6} onChange={(e) => setTexto(chave, e.target.value)}
-          placeholder={placeholder || "Escreva aqui."}
-          className="w-full rounded-lg border border-blue-200 bg-brand-50/30 px-3 py-2 text-[13px] leading-relaxed outline-none focus:border-brand-400 focus:ring-4 focus:ring-brand-500/10 transition-colors mb-3" />
+        <div key={chave} className="mb-3">
+          <textarea
+            value={textoParaEditor(textoBruto)}
+            rows={rows || 6}
+            onChange={(e) => setTexto(chave, e.target.value)}
+            placeholder={placeholder || "Escreva aqui."}
+            className="w-full rounded-lg border border-blue-200 bg-brand-50/30 px-3 py-2 text-[13px] leading-relaxed outline-none focus:border-brand-400 focus:ring-4 focus:ring-brand-500/10 transition-colors"
+          />
+          {usaModeloAutomatico && (
+            <p className="print:hidden text-[10px] text-slate-500 mt-1.5">
+              Nome, imóvel e demais dados já aparecem preenchidos. Se você alterar o texto, ele fica fixo.
+            </p>
+          )}
+          {opts.restauravel && textoRestauravel && (
+            <button type="button" onClick={() => setTexto(chave, textoRestauravel)}
+              className="print:hidden mt-1.5 text-[10px] font-medium text-brand-600 hover:text-brand-700 cursor-pointer">
+              Restaurar texto padrão{chave === "metodologia" ? " do método selecionado" : " (atualiza com os dados do laudo)"}
+            </button>
+          )}
+        </div>
       );
     }
-    if (!texto.trim()) {
+    if (!textoBruto.trim()) {
       return (
         <button key={chave} onClick={() => setEditando(true)}
           className="print:hidden w-full text-left text-xs italic text-amber-700 bg-amber-50 border border-dashed border-amber-200 rounded px-3 py-2 mb-3 cursor-pointer">
@@ -3406,7 +3941,7 @@ function EtapaRelatorio({ imovel, comparaveis, fotos, laudo, setLaudo, setImovel
         </button>
       );
     }
-    return <Paragrafos key={chave} texto={texto} vars={vars} />;
+    return <Paragrafos key={chave} texto={textoBruto} vars={vars} />;
   };
 
   const sumario = [
@@ -3431,14 +3966,14 @@ function EtapaRelatorio({ imovel, comparaveis, fotos, laudo, setLaudo, setImovel
 
   return (
     <div className="space-y-6">
-      <PainelIdentidadeLaudo branding={branding} onEnviarLogo={onEnviarLogo} onEnviarTemplate={onEnviarTemplate}
-        onToggleLogo={onToggleLogo} onToggleOcultarCabecalho={onToggleOcultarCabecalho} enviandoBranding={enviandoBranding} />
-
       <div className="ui-card p-5 print:hidden">
         <div className="flex items-start justify-between gap-3 flex-wrap mb-4">
           <div>
             <p className="text-sm font-semibold text-slate-900">Laudo de avaliação</p>
-            <p className="text-xs text-slate-500 mt-1">Prévia HTML (seções A a O). Para o documento final com seu modelo Word, use <strong>Gerar Word</strong>.</p>
+            <p className="text-xs text-slate-500 mt-1">
+              Prévia HTML (seções A a O e anexos). Logo e template Word ficam em <strong>Configurações → Identidade visual</strong>.
+              Use <strong>Gerar Word</strong> ou <strong>Gerar PDF</strong> para baixar com seu layout.
+            </p>
           </div>
           <div className="flex gap-2 flex-wrap">
             <button onClick={() => setEditando((v) => !v)}
@@ -3459,9 +3994,106 @@ function EtapaRelatorio({ imovel, comparaveis, fotos, laudo, setLaudo, setImovel
           </div>
         </div>
 
+        <div className="flex items-center justify-between gap-3 py-3 mb-3 border-b border-slate-100">
+          <div>
+            <p className="text-sm font-medium text-slate-800">Documento judicial</p>
+            <p className="text-[11px] text-slate-500">Ative para incluir a página de apresentação ao juízo antes do laudo.</p>
+          </div>
+          <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer shrink-0">
+            <input type="checkbox" checked={!!laudo.documentoJudicial} onChange={(e) => setCampo("documentoJudicial", e.target.checked)} className="rounded" />
+            Laudo pericial / judicial
+          </label>
+        </div>
+
+        <div className="flex items-center justify-between gap-3 py-3 mb-3 border-b border-slate-100">
+          <div>
+            <p className="text-sm font-medium text-slate-800">Anexo II — Currículo do profissional</p>
+            <p className="text-[11px] text-slate-500">
+              {curriculoTemConteudo(curriculo)
+                ? "Capa + formação/experiência ou PDF do currículo, após o Anexo I."
+                : "Preencha em Configurações → Anexo II (formação, experiência ou PDF)."}
+            </p>
+          </div>
+          <label className={`flex items-center gap-2 text-sm shrink-0 ${curriculoTemConteudo(curriculo) ? "text-slate-700 cursor-pointer" : "text-slate-400 cursor-not-allowed"}`}>
+            <input type="checkbox" checked={!!laudo.incluirAnexoCurriculo && curriculoTemConteudo(curriculo)}
+              disabled={!curriculoTemConteudo(curriculo)}
+              onChange={(e) => setCampo("incluirAnexoCurriculo", e.target.checked)} className="rounded" />
+            Incluir Anexo II
+          </label>
+        </div>
+
+        <div className="py-3 mb-3 border-b border-slate-100 space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-medium text-slate-800">Anexo III — Respostas aos quesitos</p>
+              <p className="text-[11px] text-slate-500">Opcional. Use quando o processo tiver quesitos a responder; fica após o Anexo II.</p>
+            </div>
+            <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer shrink-0">
+              <input type="checkbox" checked={!!quesitos?.incluir}
+                onChange={(e) => onToggleIncluirQuesitos(e.target.checked)} className="rounded" />
+              Incluir Anexo III
+            </label>
+          </div>
+          {quesitos?.incluir && (
+            <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-3 space-y-3">
+              <Campo label="Respostas aos quesitos">
+                <textarea value={textoQuesitosLocal}
+                  onChange={(e) => setTextoQuesitosLocal(e.target.value)}
+                  onBlur={() => onSalvarTextoQuesitos(textoQuesitosLocal)}
+                  rows={8}
+                  placeholder={"1. Primeiro quesito formulado pelo juízo...\nResposta: ...\n\n2. Segundo quesito...\nResposta: ..."}
+                  className={campoInputClass + " resize-y min-h-[160px] text-xs"} />
+              </Campo>
+              <p className="text-[10px] text-slate-500">Salvo automaticamente ao sair do campo. Ou envie um PDF pronto:</p>
+              <div className="flex flex-wrap items-center gap-2">
+                <label className={`inline-flex items-center gap-2 ${ui.btnSecondary} text-xs px-3 py-2 cursor-pointer ${enviandoQuesitosPdf ? "opacity-50 pointer-events-none" : ""}`}>
+                  {enviandoQuesitosPdf ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+                  {enviandoQuesitosPdf ? "Enviando..." : "Enviar PDF dos quesitos"}
+                  <input type="file" accept=".pdf,application/pdf" className="hidden"
+                    onChange={(e) => { const f = e.target.files?.[0]; if (f) onEnviarQuesitosPdf(f); e.target.value = ""; }} />
+                </label>
+                {quesitos?.arquivoUrl && (
+                  <>
+                    <a href={quesitos.arquivoUrl} target="_blank" rel="noreferrer" className="text-xs text-brand-600 hover:text-brand-700">{quesitos.arquivoNome || "Ver PDF"}</a>
+                    <button type="button" onClick={onRemoverQuesitosPdf} disabled={enviandoQuesitosPdf}
+                      className="text-xs text-red-600 hover:text-red-700 disabled:opacity-50 cursor-pointer">Remover PDF</button>
+                  </>
+                )}
+              </div>
+              {quesitos?.arquivoUrl && (
+                <p className="text-[10px] text-amber-700">Com PDF anexado, a prévia usa o arquivo em vez do texto acima.</p>
+              )}
+            </div>
+          )}
+        </div>
+
+        {laudo.documentoJudicial && (
+          <div className="mb-4 p-4 rounded-lg border border-amber-200 bg-amber-50/40 space-y-3">
+            <p className="text-xs font-semibold text-amber-900">Página de apresentação ao juízo</p>
+            <Campo label="Destinatário (juízo)">
+              <textarea rows={2} value={laudo.judicial?.destinatario || ""} onChange={(e) => setJudicial("destinatario", e.target.value)}
+                placeholder="Ex: EXCELENTÍSSIMO SENHOR DOUTOR JUIZ DE DIREITO DA 22ª VARA CÍVEL DA COMARCA DE BELO HORIZONTE - MG."
+                className={campoInputClass + " resize-y text-xs uppercase"} />
+            </Campo>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <Campo label="Processo"><input value={laudo.processo} onChange={(e) => setCampo("processo", e.target.value)} placeholder="5080104-13.2022.8.13.0024" className={campoInputClass} /></Campo>
+              <Campo label="Assunto"><input value={laudo.judicial?.assunto || ""} onChange={(e) => setJudicial("assunto", e.target.value)} placeholder="Renovatória de Locação..." className={campoInputClass} /></Campo>
+              <Campo label="Autor"><input value={laudo.judicial?.autor || ""} onChange={(e) => setJudicial("autor", e.target.value)} className={campoInputClass} /></Campo>
+              <Campo label="Réu"><input value={laudo.judicial?.reu || ""} onChange={(e) => setJudicial("reu", e.target.value)} className={campoInputClass} /></Campo>
+              <Campo label="RG do profissional"><input value={laudo.judicial?.rg || ""} onChange={(e) => setJudicial("rg", e.target.value)} className={campoInputClass} /></Campo>
+              <Campo label="CPF do profissional"><input value={laudo.judicial?.cpf || ""} onChange={(e) => setJudicial("cpf", e.target.value)} className={campoInputClass} /></Campo>
+              <Campo label="Data inscrição CRECI"><input value={laudo.judicial?.creciInscricaoData || ""} onChange={(e) => setJudicial("creciInscricaoData", e.target.value)} placeholder="16/12/2016" className={campoInputClass} /></Campo>
+              <Campo label="Região CRECI"><input value={laudo.judicial?.creciRegiao || ""} onChange={(e) => setJudicial("creciRegiao", e.target.value)} placeholder="4.ª Região / MG" className={campoInputClass} /></Campo>
+            </div>
+            <p className="text-[10px] text-slate-500">Nome, CRECI e CNAI vêm dos campos abaixo. Local e data usam «Local do laudo» e «Data».</p>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <Campo label="Solicitante"><input value={laudo.solicitante} onChange={(e) => setCampo("solicitante", e.target.value)} className={campoInputClass} /></Campo>
-          <Campo label="Processo (opcional)"><input value={laudo.processo} onChange={(e) => setCampo("processo", e.target.value)} placeholder="Ex: 5080104-13.2022.8.13.0024" className={campoInputClass} /></Campo>
+          {!laudo.documentoJudicial && (
+            <Campo label="Processo (opcional)"><input value={laudo.processo} onChange={(e) => setCampo("processo", e.target.value)} placeholder="Ex: 5080104-13.2022.8.13.0024" className={campoInputClass} /></Campo>
+          )}
           <Campo label="Natureza do imóvel">
             <select value={laudo.naturezaImovel || "urbano"} onChange={(e) => setCampo("naturezaImovel", e.target.value)} className={(campoInputClass + " bg-white") + " cursor-pointer"}>
               <option value="urbano">Urbano</option>
@@ -3474,14 +4106,32 @@ function EtapaRelatorio({ imovel, comparaveis, fotos, laudo, setLaudo, setImovel
               <option value="locacao">Valor de locação mensal</option>
             </select>
           </Campo>
-          <Campo label="Nome no laudo"><input value={laudo.perita} onChange={(e) => setCampo("perita", e.target.value)} className={campoInputClass} /></Campo>
+          <Campo label="Nome no laudo"><input value={laudo.nomeProfissional} onChange={(e) => setCampo("nomeProfissional", e.target.value)} className={campoInputClass} /></Campo>
           <Campo label="Título profissional"><input value={laudo.tituloProfissional} onChange={(e) => setCampo("tituloProfissional", e.target.value)} placeholder="Ex: Corretor de imóveis" className={campoInputClass} /></Campo>
           <Campo label="CRECI"><input value={laudo.creci} onChange={(e) => setCampo("creci", e.target.value)} className={campoInputClass} /></Campo>
           <Campo label="CNAI"><input value={laudo.cnai} onChange={(e) => setCampo("cnai", e.target.value)} className={campoInputClass} /></Campo>
           <Campo label="Local do laudo"><input value={laudo.local} onChange={(e) => setCampo("local", e.target.value)} className={campoInputClass} /></Campo>
-          <Campo label="Data"><input type="date" value={laudo.data} onChange={(e) => setCampo("data", e.target.value)} className={campoInputClass} /></Campo>
+          <Campo label="Data do laudo"><input type="date" value={laudo.data} onChange={(e) => setCampo("data", e.target.value)} className={campoInputClass} /></Campo>
+          <Campo label="Número de páginas">
+            <input type="number" min={1} value={laudo.numPaginas} onChange={(e) => setCampo("numPaginas", e.target.value)}
+              placeholder={String(estimarPaginasLaudo(laudo, fotos, documentos, curriculo, quesitos))} className={campoInputClass} />
+            <p className="text-[10px] text-slate-400 mt-1">Estimativa da prévia: {estimarPaginasLaudo(laudo, fotos, documentos, curriculo, quesitos)}. Ajuste após gerar o Word, se necessário.</p>
+          </Campo>
           <Campo label={`Valor adotado (calculado e arredondado: ${brl2(valorArredondado)})`}>
-            <input value={laudo.valorAdotado} onChange={(e) => setCampo("valorAdotado", e.target.value)} placeholder={String(valorArredondado)} className={campoInputClass} />
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-slate-400 pointer-events-none">R$</span>
+              <input
+                value={laudo.valorAdotado}
+                onChange={(e) => setCampo("valorAdotado", mascaraValorMoedaBR(e.target.value))}
+                onBlur={(e) => {
+                  const n = parseNumeroBR(e.target.value);
+                  setCampo("valorAdotado", Number.isFinite(n) && n > 0 ? formatNumeroBR(n) : "");
+                }}
+                inputMode="decimal"
+                placeholder={formatNumeroBR(valorArredondado)}
+                className={campoInputClass + " pl-9"}
+              />
+            </div>
           </Campo>
         </div>
 
@@ -3491,6 +4141,8 @@ function EtapaRelatorio({ imovel, comparaveis, fotos, laudo, setLaudo, setImovel
           </p>
         )}
       </div>
+
+      {laudo.documentoJudicial && <PaginaJudicialLaudo laudo={laudo} branding={branding} dataLonga={dataLonga} />}
 
       {/* Capa */}
       <LaudoPagina laudo={laudo} branding={branding}>
@@ -3512,7 +4164,7 @@ function EtapaRelatorio({ imovel, comparaveis, fotos, laudo, setLaudo, setImovel
 
       {/* Sumário */}
       <LaudoPagina laudo={laudo} branding={branding}>
-        <h3 className="text-sm font-bold text-amber-500 mb-3">SUMÁRIO</h3>
+        <h3 className="text-sm font-bold mb-3" style={{ color: corLaudoEfetiva(branding) }}>SUMÁRIO</h3>
         <div className="space-y-1">
           {sumario.map(([titulo, sub]) => (
             <p key={titulo} className={`text-[13px] ${sub ? "pl-5 italic text-slate-600" : "font-bold text-slate-900 uppercase"} border-b border-dotted border-slate-200 pb-0.5`}>{titulo}</p>
@@ -3523,9 +4175,9 @@ function EtapaRelatorio({ imovel, comparaveis, fotos, laudo, setLaudo, setImovel
       {/* A e B */}
       <LaudoPagina laudo={laudo} branding={branding}>
         <Secao>A. INTRODUÇÃO</Secao>
-        {bloco("introducao", "Introdução", 10)}
+        {bloco("introducao", "Introdução — opcional; use «Editar textos» para personalizar", 10, { restauravel: true })}
         <Secao>B. PREMISSAS E RESSALVAS</Secao>
-        {bloco("premissas", "Premissas e ressalvas", 12)}
+        {bloco("premissas", "Premissas e ressalvas", 14)}
       </LaudoPagina>
 
       {/* C e D */}
@@ -3542,6 +4194,32 @@ function EtapaRelatorio({ imovel, comparaveis, fotos, laudo, setLaudo, setImovel
         <Secao>D. SUBSÍDIOS UTILIZADOS</Secao>
         <SubSecao>D.1. DOCUMENTAÇÃO FORNECIDA</SubSecao>
         {bloco("documentacao", "Documentação fornecida (matrícula, contrato, planilhas...)", 4)}
+        <div className="print:hidden mb-4 rounded-lg border border-slate-200 bg-slate-50/60 p-3">
+          <p className="text-xs font-semibold text-slate-700 mb-2">Anexar páginas de documentação</p>
+          <p className="text-[10px] text-slate-500 mb-3">PDF ou imagem (matrícula, contrato, RIC…). Cada arquivo vira uma página no Anexo I do laudo.</p>
+          <label className={`inline-flex items-center gap-2 ${ui.btnSecondary} text-xs px-3 py-2 cursor-pointer ${enviandoDocumento ? "opacity-50 pointer-events-none" : ""}`}>
+            {enviandoDocumento ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+            {enviandoDocumento ? "Enviando..." : "Adicionar documento"}
+            <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx,application/pdf,image/*" className="hidden"
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) onEnviarDocumento(f); e.target.value = ""; }} />
+          </label>
+          {documentos.length > 0 && (
+            <ul className="mt-3 space-y-2">
+              {documentos.map((doc) => (
+                <li key={doc.id} className="flex items-center justify-between gap-2 rounded border border-slate-200 bg-white px-2.5 py-2 text-xs">
+                  <div className="min-w-0">
+                    <p className="font-medium text-slate-800 truncate">{doc.nome}</p>
+                    {!doc.ehVisualizavel && <p className="text-[10px] text-amber-700">Word — inclua manualmente no Word final</p>}
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <a href={doc.url} target="_blank" rel="noreferrer" className="text-brand-600 hover:text-brand-700">Abrir</a>
+                    <button type="button" onClick={() => onRemoverDocumento(doc.id)} className="text-red-600 hover:text-red-700 cursor-pointer">Remover</button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
         <SubSecao>D.2. VISTORIA</SubSecao>
         {bloco("vistoria", "Data da vistoria, presentes e principais características observadas", 5)}
         <SubSecao>D.3. ADEQUAÇÃO</SubSecao>
@@ -3551,14 +4229,31 @@ function EtapaRelatorio({ imovel, comparaveis, fotos, laudo, setLaudo, setImovel
       {/* E e F */}
       <LaudoPagina laudo={laudo} branding={branding}>
         <Secao>E. LOCALIZAÇÃO</Secao>
-        {bloco("localizacao", `Descreva a localização (${imovel.bairro}, ${imovel.cidade}) e o entorno`, 5)}
+        {bloco("localizacao", "Complemente com comentários sobre o entorno, acesso e vizinhança", 5, { restauravel: true })}
         <Secao>F. COMENTÁRIOS MERCADOLÓGICOS</Secao>
         <SubSecao>F.1. MERCADO ATUAL</SubSecao>
         {bloco("mercadoAtual", "Comentários sobre o mercado atual", 5)}
-        <SubSecao>F.2. PERSPECTIVAS FUTURAS</SubSecao>
-        {bloco("perspectivas", "Perspectivas futuras do mercado", 5)}
+        <div className="flex items-center justify-between gap-2">
+          <SubSecao>F.2. PERSPECTIVAS FUTURAS</SubSecao>
+          <button type="button" onClick={() => gerarPerspectivasIA(true)} disabled={gerandoPerspectivas}
+            className="print:hidden shrink-0 flex items-center gap-1 text-[11px] font-medium text-brand-600 hover:text-brand-700 disabled:opacity-50 cursor-pointer">
+            {gerandoPerspectivas ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
+            {gerandoPerspectivas ? "Gerando..." : "Regenerar com IA"}
+          </button>
+        </div>
+        {gerandoPerspectivas && !(laudo.textos.perspectivas || "").trim() ? (
+          <div className="print:hidden mb-3 rounded-lg border border-dashed border-brand-200 bg-brand-50/40 px-3 py-4 text-xs text-slate-600 flex items-center gap-2">
+            <Loader2 className="h-4 w-4 animate-spin text-brand-600 shrink-0" />
+            Gerando perspectivas futuras com IA...
+          </div>
+        ) : (
+          bloco("perspectivas", "Perspectivas futuras do mercado", 5)
+        )}
+        {erroPerspectivas && (
+          <p className="print:hidden text-[11px] text-red-600 mb-3">{erroPerspectivas}</p>
+        )}
         <SubSecao>F.3. VALORES RESULTANTES</SubSecao>
-        {bloco("valoresResultantes", "Valores resultantes", 3)}
+        {bloco("valoresResultantes", "Conclusão geral sobre os valores obtidos na pesquisa", 3, { restauravel: true })}
       </LaudoPagina>
 
       {/* G */}
@@ -3582,8 +4277,18 @@ function EtapaRelatorio({ imovel, comparaveis, fotos, laudo, setLaudo, setImovel
       <LaudoPagina laudo={laudo} branding={branding}>
         <Secao>H. METODOLOGIA</Secao>
         <SubSecao>H.1. METODOLOGIA UTILIZADA</SubSecao>
-        <p className="text-[13px] font-bold underline text-slate-900 mb-2">Método Comparativo Direto de Dados</p>
-        {bloco("metodologia", "Metodologia utilizada", 16)}
+        <div className="print:hidden mb-3">
+          <Campo label="Método de avaliação">
+            <select value={metodoAtual} onChange={(e) => setMetodoAvaliacao(e.target.value)}
+              className={(campoInputClass + " bg-white max-w-md") + " cursor-pointer"}>
+              <option value="comparativo">Comparativo direto de dados</option>
+              <option value="evolutivo">Evolutivo</option>
+            </select>
+          </Campo>
+          <p className="text-[10px] text-slate-500 mt-1">Ao trocar o método, o texto abaixo volta ao padrão — você pode editar depois em «Editar textos».</p>
+        </div>
+        <p className="text-[13px] font-bold underline text-slate-900 mb-2">{METODOLOGIA_TITULOS[metodoAtual]}</p>
+        {bloco("metodologia", "Metodologia utilizada", 16, { restauravel: true })}
         <SubSecao>H.2. HOMOGENEIZAÇÃO DE VALORES</SubSecao>
         {bloco("homogeneizacao", "Homogeneização de valores", 12)}
       </LaudoPagina>
@@ -3599,7 +4304,7 @@ function EtapaRelatorio({ imovel, comparaveis, fotos, laudo, setLaudo, setImovel
         <Secao>J. LEVANTAMENTO DE PESQUISA</Secao>
         <SubSecao>J.1. CROQUI DAS AMOSTRAS</SubSecao>
         <div className="relative z-0 isolate overflow-hidden rounded-lg">
-          <MapaCroquiComparaveis imovel={imovel} comparaveis={comparaveis} altura={360} modoRelatorio />
+          <MapaCroquiComparaveis imovel={imovel} comparaveis={comparaveis} altura={360} modoRelatorio corDestaque={corLaudoEfetiva(branding)} />
         </div>
         <p className="text-[11px] text-center text-slate-500 mt-1 mb-4 print:hidden">Croqui de localização do avaliando e das amostras — ajuste as posições na etapa Comparáveis (ícone de mapa)</p>
         <SubSecao>J.2. FICHAS DE PESQUISA</SubSecao>
@@ -3651,7 +4356,7 @@ function EtapaRelatorio({ imovel, comparaveis, fotos, laudo, setLaudo, setImovel
         </div>
         <Secao>M. GRÁFICOS</Secao>
         <p className="text-[12px] font-semibold text-slate-700 mb-1">Unitário homogeneizado por elemento × média saneada e limites</p>
-        <GraficoUnitarios linhas={calc.linhas} media={san.mediaSaneada} minimo={san.minimo} maximo={san.maximo} />
+        <GraficoUnitarios linhas={calc.linhas} media={san.mediaSaneada} minimo={san.minimo} maximo={san.maximo} corDestaque={corLaudoEfetiva(branding)} />
         <p className="print:hidden text-[11px] text-amber-700 bg-amber-50 border border-amber-100 rounded px-3 py-2 mt-3">
           Os gráficos de resíduos relativos e de unitários observados × estimados do laudo de referência serão configurados junto com a avaliadora.
         </p>
@@ -3664,23 +4369,32 @@ function EtapaRelatorio({ imovel, comparaveis, fotos, laudo, setLaudo, setImovel
 
         <div className="border border-gray-400 text-[11px] mb-4 break-inside-avoid">
           <div className="bg-black text-white font-bold px-2 py-1.5 text-center">Tabela 3 - Graus de fundamentação no caso de utilização do tratamento por fatores (ABNT NBR 14653-2:2011)</div>
-          <div className="grid grid-cols-[32px_1fr_1.2fr_54px] font-bold border-b border-gray-300 bg-slate-50 text-center">
+          <div className="grid grid-cols-[32px_1fr_1.2fr_72px] font-bold border-b border-gray-300 bg-slate-50 text-center">
             <div className="py-1">Item</div><div className="py-1">Descrição</div><div className="py-1">Resultado</div><div className="py-1">Pontos</div>
           </div>
           {itensFund.map(([item, desc, res]) => (
-            <div key={item} className="grid grid-cols-[32px_1fr_1.2fr_54px] border-b border-slate-200 items-center">
+            <div key={item} className="grid grid-cols-[32px_1fr_1.2fr_72px] border-b border-slate-200 items-center">
               <div className="py-2 text-center font-semibold">{item}</div>
               <div className="py-2 px-2">{desc}</div>
               <div className="py-2 px-2">{res}</div>
-              <div className="py-2 text-center">
-                <select value={pontos[item]} onChange={(e) => setPonto(item, e.target.value)} className="print:hidden border border-gray-300 rounded px-1 py-0.5 bg-white cursor-pointer">
-                  {[0, 1, 2, 3].map((p) => <option key={p} value={p}>{p}</option>)}
-                </select>
-                <span className="hidden print:inline">{pontos[item]}</span>
+              <div className="py-2 px-1 text-center">
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={pontoEditando === item ? pontoTexto : formatPontoFundamentacao(pontos[item])}
+                  onFocus={() => iniciarEdicaoPonto(item, pontos[item])}
+                  onChange={(e) => setPontoTexto(e.target.value)}
+                  onBlur={() => finalizarEdicaoPonto(item)}
+                  onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }}
+                  placeholder="0"
+                  title="Informe os pontos manualmente (ex.: 2, 0,7 ou 4,5)"
+                  className="print:hidden w-full border border-gray-300 rounded px-1 py-0.5 bg-white text-center text-[11px] focus:border-brand-500 focus:ring-1 focus:ring-brand-200"
+                />
+                <span className="hidden print:inline">{formatPontoFundamentacao(pontos[item])}</span>
               </div>
             </div>
           ))}
-          <div className="flex justify-end px-3 py-1.5 font-bold">Total: <span className="w-12 text-center">{fund.total}</span></div>
+          <div className="flex justify-end px-3 py-1.5 font-bold">Total: <span className="w-14 text-center">{formatPontoFundamentacao(fund.total)}</span></div>
         </div>
 
         <div className="border border-gray-400 text-[11px] mb-4 break-inside-avoid">
@@ -3703,15 +4417,81 @@ function EtapaRelatorio({ imovel, comparaveis, fotos, laudo, setLaudo, setImovel
       {/* O */}
       <LaudoPagina laudo={laudo} branding={branding}>
         <Secao>O. ENCERRAMENTO</Secao>
-        {bloco("encerramento", "Encerramento", 3)}
-        <p className="text-[13px] text-slate-700 text-right mt-8">{laudo.local}, {dataLonga}.</p>
+        {bloco("encerramento", "Encerramento — informe o número de páginas e a data nos campos acima", 4, { restauravel: true })}
+        <p className="text-[13px] text-slate-700 text-right mt-8">{laudo.local || "[local]"}, {dataLonga}.</p>
         <div className="text-center mt-14">
-          <p className="text-[13px] font-bold italic text-slate-900">{laudo.perita}</p>
+          <p className="text-[13px] font-bold italic text-slate-900">{laudo.nomeProfissional}</p>
           {laudo.tituloProfissional && <p className="text-[12px] text-slate-700 uppercase">{laudo.tituloProfissional}</p>}
           {laudo.creci && <p className="text-[12px] text-slate-700">{laudo.creci}</p>}
           {laudo.cnai && <p className="text-[12px] text-slate-700 mt-1">{laudo.cnai}</p>}
         </div>
       </LaudoPagina>
+
+      {documentos.length > 0 && (
+        <>
+          <LaudoPagina laudo={laudo} branding={branding}>
+            <div className="flex min-h-[520px] items-center justify-center">
+              <p className="text-center text-lg font-bold uppercase text-slate-900 tracking-wide">Anexo I: Documentação do imóvel.</p>
+            </div>
+          </LaudoPagina>
+          {documentos.map((doc) => (
+            <LaudoPagina key={doc.id} laudo={laudo} branding={branding}>
+              {doc.ehPdf ? (
+                <PdfPreview url={doc.url} title={doc.nome} />
+              ) : doc.ehImagem ? (
+                <img src={doc.url} alt={doc.nome} className="mx-auto max-w-full max-h-[720px] object-contain border border-slate-200 rounded" />
+              ) : (
+                <div className="rounded-lg border border-dashed border-amber-300 bg-amber-50 px-4 py-8 text-center text-sm text-amber-900">
+                  <p className="font-medium">{doc.nome}</p>
+                  <p className="mt-2 text-xs">Este formato não aparece na prévia. Baixe e inclua no Word final.</p>
+                  <a href={doc.url} target="_blank" rel="noreferrer" className="mt-3 inline-block text-brand-600 hover:text-brand-700 text-xs font-medium">Baixar arquivo</a>
+                </div>
+              )}
+              <p className="mt-2 text-[11px] text-slate-500 text-center">{doc.nome}</p>
+            </LaudoPagina>
+          ))}
+        </>
+      )}
+
+      {laudo.incluirAnexoCurriculo !== false && curriculoTemConteudo(curriculo) && (
+        <>
+          <LaudoPagina laudo={laudo} branding={branding}>
+            <div className="flex min-h-[520px] items-center justify-center">
+              <p className="text-center text-lg font-bold uppercase text-slate-900 tracking-wide">Anexo II: Dados do profissional nomeado.</p>
+            </div>
+          </LaudoPagina>
+          {curriculo.arquivoUrl ? (
+            <LaudoPagina laudo={laudo} branding={branding}>
+              <PdfPreview url={curriculo.arquivoUrl} title={curriculo.arquivoNome || "Currículo"} />
+              <p className="mt-2 text-[11px] text-slate-500 text-center">{curriculo.arquivoNome}</p>
+            </LaudoPagina>
+          ) : (
+            <LaudoPagina laudo={laudo} branding={branding}>
+              <PaginaCurriculoTexto curriculo={curriculo} />
+            </LaudoPagina>
+          )}
+        </>
+      )}
+
+      {quesitos?.incluir && quesitosTemConteudo(quesitos) && (
+        <>
+          <LaudoPagina laudo={laudo} branding={branding}>
+            <div className="flex min-h-[520px] items-center justify-center">
+              <p className="text-center text-lg font-bold uppercase text-slate-900 tracking-wide">Anexo III: Respostas aos quesitos.</p>
+            </div>
+          </LaudoPagina>
+          {quesitos.arquivoUrl ? (
+            <LaudoPagina laudo={laudo} branding={branding}>
+              <PdfPreview url={quesitos.arquivoUrl} title={quesitos.arquivoNome || "Respostas aos quesitos"} />
+              <p className="mt-2 text-[11px] text-slate-500 text-center">{quesitos.arquivoNome}</p>
+            </LaudoPagina>
+          ) : (
+            <LaudoPagina laudo={laudo} branding={branding}>
+              <div className="text-[12px] text-slate-800 leading-relaxed whitespace-pre-wrap">{quesitos.texto.trim()}</div>
+            </LaudoPagina>
+          )}
+        </>
+      )}
 
       <div className="flex justify-start print:hidden">
         <button onClick={onVoltar} className="flex items-center gap-2 text-sm text-slate-500 hover:text-slate-700 px-4 py-2.5 cursor-pointer"><ArrowLeft className="h-4 w-4" /> Voltar</button>
@@ -3732,6 +4512,9 @@ function AvaliacaoModuleScreen({ token, user, onIrAssinatura }) {
   const [imovel, setImovel] = useState(IMOVEL_VAZIO);
   const [comparaveis, setComparaveis] = useState([]);
   const [fotos, setFotos] = useState([]);
+  const [documentos, setDocumentos] = useState([]);
+  const [quesitos, setQuesitos] = useState({ incluir: false, texto: "", arquivoUrl: null, arquivoNome: "", ehPdf: false });
+  const [enviandoQuesitosPdf, setEnviandoQuesitosPdf] = useState(false);
   const [laudo, setLaudo] = useState(() => laudoInicialFromPerfil(user));
   const [resultado, setResultado] = useState(null);
   const [salvando, setSalvando] = useState(false);
@@ -3741,10 +4524,10 @@ function AvaliacaoModuleScreen({ token, user, onIrAssinatura }) {
   const [fatoresCalculados, setFatoresCalculados] = useState(false);
   const [erroFatores, setErroFatores] = useState(null);
   const [enviandoFoto, setEnviandoFoto] = useState(false);
+  const [enviandoDocumento, setEnviandoDocumento] = useState(false);
   const [concluindo, setConcluindo] = useState(false);
   const [erroGeral, setErroGeral] = useState(null);
   const [branding, setBranding] = useState(null);
-  const [enviandoBranding, setEnviandoBranding] = useState(false);
   const [gerandoLaudoWord, setGerandoLaudoWord] = useState(false);
   const [gerandoLaudoPdf, setGerandoLaudoPdf] = useState(false);
   const [excluindoId, setExcluindoId] = useState(null);
@@ -3772,7 +4555,10 @@ function AvaliacaoModuleScreen({ token, user, onIrAssinatura }) {
   }
 
   useEffect(() => { if (view === "lista") carregarLista(); }, [view, token]);
-  useEffect(() => { if (view === "wizard") carregarBranding(); }, [view, token]);
+  useEffect(() => {
+    if (view !== "wizard") return;
+    carregarBranding();
+  }, [view, token, etapa]);
 
   useEffect(() => {
     if (!token) return;
@@ -3782,7 +4568,7 @@ function AvaliacaoModuleScreen({ token, user, onIrAssinatura }) {
         if (!perfil) return;
         setLaudo((l) => ({
           ...l,
-          perita: l.perita || perfil.nome || "",
+          nomeProfissional: l.nomeProfissional || perfil.nome || "",
           tituloProfissional: l.tituloProfissional || perfil.titulo_profissional || "",
           qualificacaoLaudo: l.qualificacaoLaudo || qualificacaoLaudoDefault(perfil.creci, perfil.cnai, perfil.qualificacao_laudo),
           creci: l.creci || perfil.creci || "",
@@ -3806,6 +4592,8 @@ function AvaliacaoModuleScreen({ token, user, onIrAssinatura }) {
     setImovel(imovelApi);
     setComparaveis(dados.comparaveis.map(comparavelFromApi));
     setFotos(dados.fotos.map(fotoFromApi));
+    setDocumentos((dados.documentos || []).map(documentoFromApi));
+    setQuesitos(quesitosFromApi(dados));
     setLaudo((l) => ({
       ...l,
       local: dados.cidade || l.local,
@@ -4069,67 +4857,108 @@ function AvaliacaoModuleScreen({ token, user, onIrAssinatura }) {
     setFotos((f) => f.filter((x) => x.id !== fotoId));
   }
 
+  async function enviarDocumento(file) {
+    setEnviandoDocumento(true);
+    setErroGeral(null);
+    try {
+      const fd = new FormData();
+      fd.append("arquivo", file);
+      const resp = await apiAvaliacoes(token, `/${avaliacaoId}/documentos`, { method: "POST", body: fd });
+      setDocumentos((d) => [...d, documentoFromApi(resp)]);
+    } catch (err) {
+      setErroGeral(err.message);
+    } finally {
+      setEnviandoDocumento(false);
+    }
+  }
+
+  async function removerDocumento(docId) {
+    setErroGeral(null);
+    try {
+      await apiAvaliacoes(token, `/${avaliacaoId}/documentos/${docId}`, { method: "DELETE" });
+      setDocumentos((d) => d.filter((x) => x.id !== docId));
+    } catch (err) {
+      setErroGeral(err.message);
+    }
+  }
+
+  async function toggleIncluirQuesitos(incluir) {
+    setErroGeral(null);
+    try {
+      const resp = await apiAvaliacoes(token, `/${avaliacaoId}/quesitos`, {
+        method: "PATCH",
+        body: JSON.stringify({ incluir_anexo_quesitos: incluir }),
+      });
+      setQuesitos(quesitosFromApi(resp));
+    } catch (err) {
+      setErroGeral(err.message);
+    }
+  }
+
+  async function salvarTextoQuesitos(texto) {
+    setErroGeral(null);
+    try {
+      const resp = await apiAvaliacoes(token, `/${avaliacaoId}/quesitos`, {
+        method: "PATCH",
+        body: JSON.stringify({ respostas_quesitos: texto }),
+      });
+      setQuesitos(quesitosFromApi(resp));
+    } catch (err) {
+      setErroGeral(err.message);
+    }
+  }
+
+  async function enviarQuesitosPdf(file) {
+    setEnviandoQuesitosPdf(true);
+    setErroGeral(null);
+    try {
+      const fd = new FormData();
+      fd.append("arquivo", file);
+      const resp = await apiAvaliacoes(token, `/${avaliacaoId}/quesitos/arquivo`, { method: "POST", body: fd });
+      setQuesitos(quesitosFromApi(resp));
+    } catch (err) {
+      setErroGeral(err.message);
+    } finally {
+      setEnviandoQuesitosPdf(false);
+    }
+  }
+
+  async function removerQuesitosPdf() {
+    setEnviandoQuesitosPdf(true);
+    setErroGeral(null);
+    try {
+      const resp = await apiAvaliacoes(token, `/${avaliacaoId}/quesitos/arquivo`, { method: "DELETE" });
+      setQuesitos(quesitosFromApi(resp));
+    } catch (err) {
+      setErroGeral(err.message);
+    } finally {
+      setEnviandoQuesitosPdf(false);
+    }
+  }
+
   async function atualizarFoto(fotoId, patch) {
     const resp = await apiAvaliacoes(token, `/${avaliacaoId}/fotos/${fotoId}`, { method: "PATCH", body: JSON.stringify(patch) });
     setFotos((f) => f.map((x) => (x.id === fotoId ? fotoFromApi(resp) : x)));
   }
 
-  async function enviarLogo(file) {
-    setEnviandoBranding(true);
-    try {
-      const fd = new FormData();
-      fd.append("arquivo", file);
-      const b = await apiAvaliacoes(token, "/branding/logo-laudo", { method: "POST", body: fd });
-      setBranding(brandingFromApi(b));
-      if (!brandingFromApi(b).exibirLogoLaudo) {
-        const ativado = await apiAvaliacoes(token, "/branding", { method: "PATCH", body: JSON.stringify({ exibir_logo_laudo: true }) });
-        setBranding(brandingFromApi(ativado));
-      }
-    } catch (err) {
-      setErroGeral(err.message);
-    } finally {
-      setEnviandoBranding(false);
-    }
-  }
-
-  async function enviarTemplate(file) {
-    setEnviandoBranding(true);
-    try {
-      const fd = new FormData();
-      fd.append("arquivo", file);
-      const b = await apiAvaliacoes(token, "/branding/template-laudo", { method: "POST", body: fd });
-      setBranding(brandingFromApi(b));
-    } catch (err) {
-      setErroGeral(err.message);
-    } finally {
-      setEnviandoBranding(false);
-    }
-  }
-
-  async function toggleLogo(ativo) {
-    try {
-      const b = await apiAvaliacoes(token, "/branding", { method: "PATCH", body: JSON.stringify({ exibir_logo_laudo: ativo }) });
-      setBranding(brandingFromApi(b));
-    } catch (err) {
-      setErroGeral(err.message);
-    }
-  }
-
-  async function toggleOcultarCabecalho(ativo) {
-    try {
-      const b = await apiAvaliacoes(token, "/branding", { method: "PATCH", body: JSON.stringify({ ocultar_cabecalho_laudo: ativo }) });
-      setBranding(brandingFromApi(b));
-    } catch (err) {
-      setErroGeral(err.message);
-    }
-  }
-
   function payloadLaudoExport() {
     const calc = calcularLaudo(imovel, comparaveis);
     const valorArredondado = Math.round(calc.valorCalculado / 10) * 10;
-    const valorFinal = laudo.valorAdotado ? Number(String(laudo.valorAdotado).replace(/\D/g, "")) : valorArredondado;
+    const valorFinal = valorMoedaBR(laudo.valorAdotado, valorArredondado);
     const ehLocacao = laudo.finalidade === "locacao";
+    const j = laudo.judicial || JUDICIAL_INICIAL;
     return {
+      documento_judicial: !!laudo.documentoJudicial,
+      judicial: laudo.documentoJudicial ? {
+        destinatario: j.destinatario || "",
+        autor: j.autor || "",
+        reu: j.reu || "",
+        assunto: j.assunto || "",
+        rg: j.rg || "",
+        cpf: j.cpf || "",
+        creci_inscricao_data: j.creciInscricaoData || "",
+        creci_regiao: j.creciRegiao || "4.ª Região / MG",
+      } : null,
       solicitante: laudo.solicitante,
       processo: laudo.processo || null,
       matricula: imovel.matricula || null,
@@ -4137,15 +4966,25 @@ function AvaliacaoModuleScreen({ token, user, onIrAssinatura }) {
       finalidade: laudo.finalidade,
       local: laudo.local,
       data: laudo.data,
-      perita: laudo.perita,
+      num_paginas: laudo.numPaginas ? Number(String(laudo.numPaginas).replace(/\D/g, "")) || null : null,
+      perita: laudo.nomeProfissional,
+      nome_profissional: laudo.nomeProfissional,
       titulo_profissional: laudo.tituloProfissional || "",
       qualificacao_laudo: laudo.qualificacaoLaudo || qualificacaoLaudoDefault(laudo.creci, laudo.cnai),
       creci: laudo.creci,
       cnai: laudo.cnai,
       valor_adotado: valorFinal,
       valor_extenso: valorPorExtenso(valorFinal).toUpperCase() + (ehLocacao ? " POR MÊS" : ""),
-      textos: laudo.textos,
-      pontos: Object.fromEntries(Object.entries(laudo.pontos || {}).map(([k, v]) => [String(k), v])),
+      metodo_avaliacao: metodoAvaliacaoAtual(laudo),
+      incluir_anexo_quesitos: !!quesitos?.incluir,
+      respostas_quesitos: quesitos?.texto?.trim() || null,
+      textos: textosLaudoEfetivos(laudo),
+      pontos: Object.fromEntries(
+        Object.entries(laudo.pontos || {}).map(([k, v]) => {
+          const n = typeof v === "number" ? v : parseNumeroBR(v);
+          return [String(k), Number.isFinite(n) ? n : 0];
+        }),
+      ),
     };
   }
 
@@ -4215,7 +5054,7 @@ function AvaliacaoModuleScreen({ token, user, onIrAssinatura }) {
       await apiAvaliacoes(token, `/${avaliacaoId}/concluir`, { method: "POST", body: JSON.stringify({ valor_final: valorArredondado }) });
       setLaudo((l) => ({
         ...l,
-        valorAdotado: String(valorArredondado),
+        valorAdotado: formatNumeroBR(valorArredondado),
         local: imovel.cidade || l.local,
       }));
       setEtapa(6);
@@ -4255,7 +5094,8 @@ function AvaliacaoModuleScreen({ token, user, onIrAssinatura }) {
           onVoltar={() => setEtapa(1)} onProximo={() => setEtapa(3)} token={token} avaliacaoId={avaliacaoId}
           onAdicionarComparavel={adicionarComparavel} onEditarComparavel={editarComparavel} onRemoverComparavel={removerComparavel}
           onGeocodificarComparaveis={geocodificarComparaveis} onMoverComparavel={moverCoordsComparavel}
-          erroBusca={erroGeral} usageLimits={usageLimits} onUsageUpdate={setUsageLimits} />
+          erroBusca={erroGeral} usageLimits={usageLimits} onUsageUpdate={setUsageLimits}
+          corDestaqueLaudo={corLaudoEfetiva(branding)} />
       )}
       {etapa === 3 && (
         <EtapaCalculos imovel={imovel} comparaveis={comparaveis} onVoltar={() => setEtapa(2)}
@@ -4272,9 +5112,12 @@ function AvaliacaoModuleScreen({ token, user, onIrAssinatura }) {
           onVoltar={() => setEtapa(4)} onProximo={irParaRelatorio} concluindo={concluindo} />
       )}
       {etapa === 6 && (
-        <EtapaRelatorio imovel={imovel} comparaveis={comparaveis} fotos={fotos} laudo={laudo} setLaudo={setLaudo} setImovel={setImovel}
-          onVoltar={() => setEtapa(5)} branding={branding} onEnviarLogo={enviarLogo} onEnviarTemplate={enviarTemplate}
-          onToggleLogo={toggleLogo} onToggleOcultarCabecalho={toggleOcultarCabecalho} enviandoBranding={enviandoBranding}
+        <EtapaRelatorio imovel={imovel} comparaveis={comparaveis} fotos={fotos} documentos={documentos}
+          onEnviarDocumento={enviarDocumento} onRemoverDocumento={removerDocumento} enviandoDocumento={enviandoDocumento}
+          quesitos={quesitos} onToggleIncluirQuesitos={toggleIncluirQuesitos} onSalvarTextoQuesitos={salvarTextoQuesitos}
+          onEnviarQuesitosPdf={enviarQuesitosPdf} onRemoverQuesitosPdf={removerQuesitosPdf} enviandoQuesitosPdf={enviandoQuesitosPdf}
+          laudo={laudo} setLaudo={setLaudo} setImovel={setImovel}
+          token={token} avaliacaoId={avaliacaoId} onVoltar={() => setEtapa(5)} branding={branding}
           onGerarWord={exportarLaudoWord} onGerarPdf={exportarLaudoPdf} gerandoWord={gerandoLaudoWord} gerandoPdf={gerandoLaudoPdf} />
       )}
     </div>
@@ -4302,12 +5145,19 @@ function ConfiguracoesScreen({ token, user, onPerfilAtualizado }) {
   const [salvo, setSalvo] = useState(false);
   const [salvandoPerfil, setSalvandoPerfil] = useState(false);
   const [erroPerfil, setErroPerfil] = useState(null);
+  const [branding, setBranding] = useState(null);
+  const [enviandoBranding, setEnviandoBranding] = useState(false);
   const [nome, setNome] = useState(user?.nome || "");
   const [tituloProfissional, setTituloProfissional] = useState("");
   const [creci, setCreci] = useState("");
   const [cnai, setCnai] = useState("");
   const [localLaudo, setLocalLaudo] = useState("Belo Horizonte");
   const [qualificacaoLaudo, setQualificacaoLaudo] = useState("");
+  const [curriculoFormacao, setCurriculoFormacao] = useState("");
+  const [curriculoExperiencia, setCurriculoExperiencia] = useState("");
+  const [curriculoArquivoUrl, setCurriculoArquivoUrl] = useState(null);
+  const [curriculoArquivoNome, setCurriculoArquivoNome] = useState("");
+  const [enviandoCurriculo, setEnviandoCurriculo] = useState(false);
   useEffect(() => {
     if (!token) return;
     fetch(`${API_BASE}/auth/me`, { headers: { Authorization: `Bearer ${token}` } })
@@ -4320,9 +5170,87 @@ function ConfiguracoesScreen({ token, user, onPerfilAtualizado }) {
         setCnai(p.cnai || "");
         setLocalLaudo(p.local_laudo || "Belo Horizonte");
         setQualificacaoLaudo(p.qualificacao_laudo || "");
+        setCurriculoFormacao(p.curriculo_formacao || "");
+        setCurriculoExperiencia(p.curriculo_experiencia || "");
+        setCurriculoArquivoUrl(p.curriculo_arquivo_url ? `${API_BASE}${p.curriculo_arquivo_url}` : null);
+        setCurriculoArquivoNome(p.curriculo_arquivo_nome || "");
       })
       .catch(() => {});
   }, [token, user?.nome]);
+
+  useEffect(() => {
+    if (!token) return;
+    apiAvaliacoes(token, "/branding")
+      .then((b) => setBranding(brandingFromApi(b)))
+      .catch(() => {});
+  }, [token]);
+
+  async function enviarLogoLaudo(file) {
+    setEnviandoBranding(true);
+    setErroPerfil(null);
+    try {
+      const fd = new FormData();
+      fd.append("arquivo", file);
+      const b = await apiAvaliacoes(token, "/branding/logo-laudo", { method: "POST", body: fd });
+      const next = brandingFromApi(b);
+      setBranding(next);
+      if (!next.exibirLogoLaudo) {
+        const ativado = await apiAvaliacoes(token, "/branding", { method: "PATCH", body: JSON.stringify({ exibir_logo_laudo: true }) });
+        setBranding(brandingFromApi(ativado));
+      }
+    } catch (err) {
+      setErroPerfil(err.message);
+    } finally {
+      setEnviandoBranding(false);
+    }
+  }
+
+  async function enviarTemplateLaudo(file) {
+    setEnviandoBranding(true);
+    setErroPerfil(null);
+    try {
+      const fd = new FormData();
+      fd.append("arquivo", file);
+      const b = await apiAvaliacoes(token, "/branding/template-laudo", { method: "POST", body: fd });
+      setBranding(brandingFromApi(b));
+    } catch (err) {
+      setErroPerfil(err.message);
+    } finally {
+      setEnviandoBranding(false);
+    }
+  }
+
+  async function toggleLogoLaudo(ativo) {
+    setErroPerfil(null);
+    try {
+      const b = await apiAvaliacoes(token, "/branding", { method: "PATCH", body: JSON.stringify({ exibir_logo_laudo: ativo }) });
+      setBranding(brandingFromApi(b));
+    } catch (err) {
+      setErroPerfil(err.message);
+    }
+  }
+
+  async function toggleOcultarCabecalhoLaudo(ativo) {
+    setErroPerfil(null);
+    try {
+      const b = await apiAvaliacoes(token, "/branding", { method: "PATCH", body: JSON.stringify({ ocultar_cabecalho_laudo: ativo }) });
+      setBranding(brandingFromApi(b));
+    } catch (err) {
+      setErroPerfil(err.message);
+    }
+  }
+
+  async function alterarCorDestaqueLaudo(cor) {
+    const normalizada = normalizarCorLaudo(cor);
+    setBranding((b) => ({ ...(b || brandingFromApi(null)), corDestaqueLaudo: normalizada }));
+    setErroPerfil(null);
+    try {
+      const b = await apiAvaliacoes(token, "/branding", { method: "PATCH", body: JSON.stringify({ cor_destaque_laudo: normalizada }) });
+      setBranding(brandingFromApi(b));
+    } catch (err) {
+      setErroPerfil(err.message);
+    }
+  }
 
   async function salvarPerfil() {
     setSalvandoPerfil(true);
@@ -4338,6 +5266,8 @@ function ConfiguracoesScreen({ token, user, onPerfilAtualizado }) {
           cnai,
           local_laudo: localLaudo,
           qualificacao_laudo: qualificacaoLaudo,
+          curriculo_formacao: curriculoFormacao,
+          curriculo_experiencia: curriculoExperiencia,
         }),
       });
       if (!resp.ok) throw new Error((await resp.json()).detail || "Erro ao salvar perfil");
@@ -4349,6 +5279,47 @@ function ConfiguracoesScreen({ token, user, onPerfilAtualizado }) {
       setErroPerfil(err.message);
     } finally {
       setSalvandoPerfil(false);
+    }
+  }
+
+  async function enviarCurriculoPdf(file) {
+    setEnviandoCurriculo(true);
+    setErroPerfil(null);
+    try {
+      const fd = new FormData();
+      fd.append("arquivo", file);
+      const resp = await fetch(`${API_BASE}/auth/curriculo/arquivo`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: fd,
+      });
+      if (!resp.ok) throw new Error((await resp.json()).detail || "Erro ao enviar currículo");
+      const perfil = await resp.json();
+      setCurriculoArquivoUrl(perfil.curriculo_arquivo_url ? `${API_BASE}${perfil.curriculo_arquivo_url}` : null);
+      setCurriculoArquivoNome(perfil.curriculo_arquivo_nome || "");
+      onPerfilAtualizado?.(perfil);
+    } catch (err) {
+      setErroPerfil(err.message);
+    } finally {
+      setEnviandoCurriculo(false);
+    }
+  }
+
+  async function removerCurriculoPdf() {
+    setEnviandoCurriculo(true);
+    setErroPerfil(null);
+    try {
+      const resp = await fetch(`${API_BASE}/auth/curriculo/arquivo`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!resp.ok) throw new Error((await resp.json()).detail || "Erro ao remover currículo");
+      setCurriculoArquivoUrl(null);
+      setCurriculoArquivoNome("");
+    } catch (err) {
+      setErroPerfil(err.message);
+    } finally {
+      setEnviandoCurriculo(false);
     }
   }
 
@@ -4375,6 +5346,49 @@ function ConfiguracoesScreen({ token, user, onPerfilAtualizado }) {
           </div>
         </div>
         {erroPerfil && <p className="text-xs text-red-600 mt-2">{erroPerfil}</p>}
+      </div>
+
+      <PainelIdentidadeLaudo branding={branding} onEnviarLogo={enviarLogoLaudo} onEnviarTemplate={enviarTemplateLaudo}
+        onToggleLogo={toggleLogoLaudo} onToggleOcultarCabecalho={toggleOcultarCabecalhoLaudo}
+        onAlterarCorDestaque={alterarCorDestaqueLaudo} enviandoBranding={enviandoBranding} />
+
+      <div className={`${ui.card} ${ui.cardPad}`}>
+        <p className={`${ui.sectionTitle} mb-1`}>Anexo II — Currículo do profissional</p>
+        <p className={`${ui.sectionDesc} mb-4`}>
+          Preencha uma vez e reutilize em todos os laudos. Aparece após o Anexo I com a capa «Dados do profissional nomeado».
+          Se enviar PDF, ele substitui o texto na prévia.
+        </p>
+        <div className="space-y-3">
+          <Campo label="Formação profissional (uma linha por item)">
+            <textarea value={curriculoFormacao} onChange={(e) => setCurriculoFormacao(e.target.value)} rows={6}
+              placeholder={"Técnico em Transações Imobiliárias;\nGraduação em Negócios Imobiliários;\nPós-Graduação em Engenharia de Avaliação e Perícia;"}
+              className={campoInputClass + " resize-y min-h-[120px] font-mono text-xs"} />
+          </Campo>
+          <Campo label="Experiência profissional (uma linha por item)">
+            <textarea value={curriculoExperiencia} onChange={(e) => setCurriculoExperiencia(e.target.value)} rows={6}
+              placeholder={"Corretor(a) de Imóveis — compra, venda e locação;\nAvaliador(a) de Imóveis — credenciado(a) em instituições financeiras;\nPerito(a) Judicial — TJMG, TJSP, TJGO e TJRS;"}
+              className={campoInputClass + " resize-y min-h-[120px] font-mono text-xs"} />
+          </Campo>
+          <div>
+            <p className="text-xs font-semibold text-slate-600 mb-2">Ou envie o currículo em PDF</p>
+            <div className="flex flex-wrap items-center gap-2">
+              <label className={`inline-flex items-center gap-2 ${ui.btnSecondary} text-xs px-3 py-2 cursor-pointer ${enviandoCurriculo ? "opacity-50 pointer-events-none" : ""}`}>
+                {enviandoCurriculo ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+                {enviandoCurriculo ? "Enviando..." : "Enviar PDF do currículo"}
+                <input type="file" accept=".pdf,application/pdf" className="hidden"
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f) enviarCurriculoPdf(f); e.target.value = ""; }} />
+              </label>
+              {curriculoArquivoUrl && (
+                <>
+                  <a href={curriculoArquivoUrl} target="_blank" rel="noreferrer" className="text-xs text-brand-600 hover:text-brand-700">{curriculoArquivoNome || "Ver PDF"}</a>
+                  <button type="button" onClick={removerCurriculoPdf} disabled={enviandoCurriculo}
+                    className="text-xs text-red-600 hover:text-red-700 disabled:opacity-50 cursor-pointer">Remover PDF</button>
+                </>
+              )}
+            </div>
+            <p className="text-[10px] text-slate-400 mt-1">Salve o perfil após editar os textos. O PDF é salvo ao enviar.</p>
+          </div>
+        </div>
       </div>
 
       <div className={`${ui.card} ${ui.cardPad}`}>

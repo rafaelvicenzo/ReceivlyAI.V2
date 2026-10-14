@@ -28,6 +28,7 @@ def aplicar_migracoes() -> None:
         ("usuarios", "titulo_profissional", "TEXT"),
         ("usuarios", "qualificacao_laudo", "TEXT"),
         ("imobiliarias", "ocultar_cabecalho_laudo", "INTEGER DEFAULT 0"),
+        ("imobiliarias", "cor_destaque_laudo", "TEXT DEFAULT '#F59E0B'"),
         ("leads", "quartos_interesse", "TEXT"),
         ("leads", "vagas_interesse", "TEXT"),
         ("comparaveis_avaliacao", "fator_depreciacao", "REAL"),
@@ -61,6 +62,16 @@ def aplicar_migracoes() -> None:
         ("imobiliarias", "creditos_avaliacao", "INTEGER DEFAULT 0"),
         ("usuarios", "perfil", "TEXT DEFAULT 'cliente'"),
         ("foto_tours", "prompt_usado", "TEXT"),
+        ("documentos_avaliacao", "content_type", "TEXT"),
+        ("documentos_avaliacao", "ordem", "INTEGER DEFAULT 0"),
+        ("usuarios", "curriculo_formacao", "TEXT"),
+        ("usuarios", "curriculo_experiencia", "TEXT"),
+        ("usuarios", "curriculo_arquivo_caminho", "TEXT"),
+        ("usuarios", "curriculo_arquivo_nome", "TEXT"),
+        ("avaliacoes", "incluir_anexo_quesitos", "INTEGER DEFAULT 0"),
+        ("avaliacoes", "respostas_quesitos", "TEXT"),
+        ("avaliacoes", "quesitos_arquivo_caminho", "TEXT"),
+        ("avaliacoes", "quesitos_arquivo_nome", "TEXT"),
     ]
 
     with engine.begin() as conn:
