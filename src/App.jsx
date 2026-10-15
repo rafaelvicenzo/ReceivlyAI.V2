@@ -4,6 +4,7 @@ import { MapaCroquiComparaveis, ModalAjustePosicaoMapa } from "./ui/MapaComparav
 import { AssinaturaScreen, PlanoAssinaturaPanel, usePlano } from "./ui/PlanoAssinatura.jsx";
 import { DashboardScreen } from "./ui/Dashboard.jsx";
 import { FotoToursScreen } from "./ui/FotoTours.jsx";
+import { AnunciosGerador } from "./ui/AnunciosGerador.jsx";
 import {
   LayoutGrid, MessageCircle, Video, Settings, Search, Bell, ChevronDown,
   Eye, EyeOff, LogOut, X, ArrowRight, Check, Copy, Upload, Image as ImageIcon,
@@ -81,7 +82,6 @@ const FOTOS_INICIAIS = [
   { id: 4, nome: "varanda.jpg" },
 ];
 
-const TONS_VOZ = ["Profissional", "Emocional", "Super Persuasivo", "Conectado"];
 const TRILHAS = ["Ambiente Suave", "Corporativo Moderno", "Upbeat Inspirador", "Cinematográfico"];
 
 /* ============================================================================
@@ -1066,192 +1066,6 @@ function WhatsAppScreen({ token }) {
       {modalAberto && (
         <SimularLeadModal onClose={() => setModalAberto(false)} onEnviar={simularNovoLead} enviando={enviandoSimulacao} />
       )}
-    </div>
-  );
-}
-
-/* ============================================================================
-   ANÚNCIOS MODULE
-============================================================================ */
-
-function AnunciosScreen({ token }) {
-  const [descricao, setDescricao] = useState("Apartamento reformado, com vista livre, sacada gourmet e área de lazer completa no condomínio.");
-  const [tipo, setTipo] = useState("Apartamento");
-  const [bairro, setBairro] = useState("Savassi");
-  const [preco, setPreco] = useState("R$ 780.000");
-  const [suites, setSuites] = useState(2);
-  const [vagas, setVagas] = useState(2);
-  const [tomIdx, setTomIdx] = useState(2);
-  const [gerando, setGerando] = useState(false);
-  const [etapa, setEtapa] = useState(0);
-  const [resultado, setResultado] = useState(null);
-  const [aba, setAba] = useState("portal");
-  const [copiado, setCopiado] = useState(false);
-  const [erro, setErro] = useState("");
-  const [geradoPorIa, setGeradoPorIa] = useState(false);
-
-  const etapas = ["Analisando características do imóvel...", "Adaptando tom de voz...", "Escrevendo para cada canal...", "Finalizando..."];
-
-  async function gerar() {
-    setGerando(true);
-    setResultado(null);
-    setErro("");
-    setGeradoPorIa(false);
-    setEtapa(0);
-    const interval = setInterval(() => {
-      setEtapa((prev) => Math.min(prev + 1, etapas.length - 1));
-    }, 550);
-
-    try {
-      const resp = await fetch(`${API_BASE}/anuncios/gerar`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          descricao,
-          tipo_imovel: tipo,
-          bairro,
-          preco,
-          suites: Number(suites) || 0,
-          vagas: Number(vagas) || 0,
-          tom_de_voz: TONS_VOZ[tomIdx],
-        }),
-      });
-
-      if (!resp.ok) {
-        const detalhe = await resp.json().catch(() => ({}));
-        throw new Error(detalhe.detail || "Não foi possível gerar os anúncios.");
-      }
-
-      const dados = await resp.json();
-      setResultado(dados);
-      setGeradoPorIa(Boolean(dados.gerado_por_ia));
-      setAba("portal");
-    } catch (exc) {
-      setErro(exc.message || "Erro ao gerar anúncios.");
-    } finally {
-      clearInterval(interval);
-      setGerando(false);
-      setEtapa(etapas.length - 1);
-    }
-  }
-
-  function copiar(texto) {
-    setCopiado(true);
-    setTimeout(() => setCopiado(false), 2000);
-  }
-
-  const abas = [
-    { id: "portal", label: "Portal Imobiliário", icon: Globe },
-    { id: "instagram", label: "Instagram", icon: Camera },
-    { id: "whatsapp", label: "WhatsApp", icon: MessageSquare },
-  ];
-
-  return (
-    <div className={`${ui.contentWrap} grid grid-cols-1 lg:grid-cols-2 gap-6 !space-y-0`}>
-      {/* inputs */}
-      <div className={`${ui.card} ${ui.cardPad} space-y-4 h-fit`}>
-        <div>
-          <p className={ui.sectionTitle}>Gerador de anúncios com IA</p>
-          <p className={`${ui.sectionDesc} mt-1`}>Preencha as características do imóvel e a IA escreve para cada canal.</p>
-        </div>
-
-        <div>
-          <label className="text-xs font-medium text-slate-600 mb-1.5 block">Descrição bruta do imóvel</label>
-          <textarea value={descricao} onChange={(e) => setDescricao(e.target.value)} rows={3}
-            className={`${ui.input} resize-none`} />
-        </div>
-
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="text-xs font-medium text-slate-600 mb-1.5 block">Tipo de imóvel</label>
-            <select value={tipo} onChange={(e) => setTipo(e.target.value)} className={`${ui.input} cursor-pointer`}>
-              {["Apartamento", "Casa", "Cobertura", "Studio", "Terreno"].map((t) => <option key={t}>{t}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="text-xs font-medium text-slate-600 mb-1.5 block">Bairro</label>
-            <input value={bairro} onChange={(e) => setBairro(e.target.value)} className={ui.input} />
-          </div>
-        </div>
-
-        <div className="grid grid-cols-3 gap-3">
-          <div>
-            <label className="text-xs font-medium text-slate-600 mb-1.5 block">Preço</label>
-            <input value={preco} onChange={(e) => setPreco(e.target.value)} className={ui.input} />
-          </div>
-          <div>
-            <label className="text-xs font-medium text-slate-600 mb-1.5 flex items-center gap-1"><BedDouble className="h-3 w-3" /> Suítes</label>
-            <input type="number" min={0} value={suites} onChange={(e) => setSuites(e.target.value)} className={ui.input} />
-          </div>
-          <div>
-            <label className="text-xs font-medium text-slate-600 mb-1.5 flex items-center gap-1"><Car className="h-3 w-3" /> Vagas</label>
-            <input type="number" min={0} value={vagas} onChange={(e) => setVagas(e.target.value)} className={ui.input} />
-          </div>
-        </div>
-
-        <div>
-          <label className="text-xs font-medium text-slate-600 mb-2.5 flex items-center gap-1.5"><SlidersHorizontal className="h-3.5 w-3.5" /> Tom de voz da IA</label>
-          <input type="range" min={0} max={3} step={1} value={tomIdx} onChange={(e) => setTomIdx(Number(e.target.value))}
-            className="w-full accent-brand-600 cursor-pointer" />
-          <div className="flex justify-between text-[10px] text-slate-400 mt-1">
-            {TONS_VOZ.map((t, i) => <span key={t} className={i === tomIdx ? "text-brand-600 font-semibold" : ""}>{t}</span>)}
-          </div>
-        </div>
-
-        <button onClick={gerar} disabled={gerando}
-          className={`w-full ${ui.btnPrimary} disabled:opacity-70 disabled:cursor-not-allowed`}>
-          {gerando ? <><Loader2 className="h-4 w-4 animate-spin" /> {etapas[Math.min(etapa, etapas.length - 1)]}</> : <><Sparkles className="h-4 w-4" /> Gerar material de divulgação com IA</>}
-        </button>
-        {gerando && (
-          <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
-            <div className="h-full ui-progress-fill transition-all duration-500" style={{ width: `${(etapa / etapas.length) * 100}%` }} />
-          </div>
-        )}
-        {erro && (
-          <p className="text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2">{erro}</p>
-        )}
-      </div>
-
-      {/* outputs */}
-      <div className={`${ui.card} ${ui.cardPad} flex flex-col`}>
-        <div className="flex items-start justify-between gap-3 mb-1">
-          <p className={ui.sectionTitle}>Resultados gerados</p>
-          {resultado && (
-            <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${geradoPorIa ? "bg-brand-50 text-brand-600" : "bg-slate-100 text-slate-500"}`}>
-              {geradoPorIa ? "via Groq" : "modo local"}
-            </span>
-          )}
-        </div>
-        <p className="text-xs text-slate-400 mb-4">Textos prontos para cada canal de divulgação.</p>
-
-        {!resultado ? (
-          <div className="flex-1 flex flex-col items-center justify-center text-center py-16 text-slate-400">
-            <PenLine className="h-8 w-8 mb-3 text-slate-300" />
-            <p className="text-sm">Preencha os dados e clique em gerar para ver os textos aqui.</p>
-          </div>
-        ) : (
-          <>
-            <div className="flex gap-1 bg-slate-50 rounded-lg p-1 mb-4">
-              {abas.map((a) => (
-                <button key={a.id} onClick={() => setAba(a.id)}
-                  className={`flex-1 flex items-center justify-center gap-1.5 text-xs font-medium py-2 rounded-md transition-colors ${aba === a.id ? "bg-white shadow-sm text-brand-600" : "text-slate-500 hover:text-slate-700"} cursor-pointer`}>
-                  <a.icon className="h-3.5 w-3.5" /> {a.label}
-                </button>
-              ))}
-            </div>
-            <div className="rounded-lg border border-slate-100 bg-slate-50 p-4 flex-1">
-              <pre className="whitespace-pre-wrap font-sans text-sm text-slate-700 leading-relaxed">{resultado[aba]}</pre>
-            </div>
-            <button onClick={() => copiar(resultado[aba])}
-              className={`mt-4 w-full flex items-center justify-center gap-2 rounded-lg text-sm font-medium py-2.5 transition-colors ${copiado ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-gray-900 hover:bg-gray-800 text-white"} cursor-pointer`}>
-              {copiado ? <><Check className="h-4 w-4" /> Copiado!</> : <><Copy className="h-4 w-4" /> Copiar conteúdo</>}
-            </button>
-          </>
-        )}
-      </div>
     </div>
   );
 }
@@ -5569,7 +5383,7 @@ export default function ReceivlyApp() {
             <DashboardScreen token={token} user={user} onSelectLead={(l) => setSelectedLead(l)} onNavigate={navegarPara} plano={plano} onAssinar={() => navegarPara("assinatura")} />
           )}
           {visibleScreen === "whatsapp" && <WhatsAppScreen token={token} />}
-          {visibleScreen === "anuncios" && <AnunciosScreen token={token} />}
+          {visibleScreen === "anuncios" && <AnunciosGerador token={token} />}
           {visibleScreen === "avaliacoes" && <AvaliacaoModuleScreen token={token} user={user} onIrAssinatura={() => navegarPara("assinatura")} />}
           {visibleScreen === "fotos" && <FotoToursScreen token={token} plano={plano} onIrAssinatura={() => navegarPara("assinatura")} onPlanoAtualizado={recarregarPlano} />}
           {visibleScreen === "assinatura" && <AssinaturaScreen token={token} />}

@@ -156,6 +156,42 @@ def _interactions_com_busca(model_name: str, system: str, user: str) -> str:
     return _texto_de_interaction(resp.json())
 
 
+def gerar_texto_com_imagem(
+    *,
+    system: str,
+    user: str,
+    image_bytes: bytes,
+    mime_type: str = "image/jpeg",
+    json_mode: bool = True,
+    model: str | None = None,
+) -> GeminiResposta:
+    import base64
+
+    if not settings.gemini_api_key:
+        raise RuntimeError("GEMINI_API_KEY não configurada")
+
+    model_name = model or settings.gemini_model
+    inicio = time.perf_counter()
+    body: dict = {
+        "systemInstruction": {"parts": [{"text": system}]},
+        "contents": [{
+            "role": "user",
+            "parts": [
+                {"inline_data": {"mime_type": mime_type, "data": base64.b64encode(image_bytes).decode("ascii")}},
+                {"text": user},
+            ],
+        }],
+    }
+    if json_mode:
+        body["generationConfig"] = {"responseMimeType": "application/json"}
+
+    url = f"{_API_BASE}/models/{model_name}:generateContent"
+    resp = _post_com_retry(url, json_body=body, usar_busca=False, timeout=120)
+    texto = _texto_de_generate_content(resp.json())
+    duracao_ms = int((time.perf_counter() - inicio) * 1000)
+    return GeminiResposta(texto=texto, modelo=model_name, duracao_ms=duracao_ms)
+
+
 def gerar_texto(
     *,
     system: str,

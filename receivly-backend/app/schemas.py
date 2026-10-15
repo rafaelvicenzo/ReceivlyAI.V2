@@ -129,6 +129,243 @@ class GerarAnuncioResponse(BaseModel):
     gerado_por_ia: bool = False
 
 
+class AnuncioGeracaoConfig(BaseModel):
+    canais: list[str] = ["portal", "instagram", "facebook", "whatsapp", "patrocinado"]
+    tom: str = "profissional_persuasivo"
+    finalidade: str = "venda"
+    comprimento: str = "auto"
+    gerar_artes: bool = True
+    gerar_artes_ia: bool = True
+    formatos_arte: list[str] = ["feed", "stories"]
+    foto_ids: list[int] = []
+    gerar_variantes: bool = True
+    canal_variantes: str | None = "instagram"
+    canais_abordagens: list[str] = ["portal", "instagram", "whatsapp"]
+    cta: str | None = "Agende sua visita"
+    contato: str | None = None
+    publico_alvo_hint: str | None = None
+    nome_imobiliaria: str | None = None
+    cor_destaque: str | None = "#F59E0B"
+    exibir_logo_arte: bool = False
+    exibir_nome_imobiliaria_arte: bool = False
+    mensagem_arte: str | None = None
+    hashtags_selecionadas: list[str] = []
+    overrides: dict | None = None
+
+
+class HashtagItem(BaseModel):
+    tag: str
+    relevancia: str = "media"
+    motivo: str | None = None
+
+
+class HashtagCategoria(BaseModel):
+    id: str
+    label: str
+    tags: list[HashtagItem]
+
+
+class HashtagSugerirRequest(BaseModel):
+    imovel_anuncio_id: int
+    canal: str = "instagram"
+
+
+class HashtagSugerirResponse(BaseModel):
+    categorias: list[HashtagCategoria]
+    gerado_por_ia: bool = False
+    modelo: str = "local"
+    alertas: list[str] = []
+
+
+class AnuncioEventoCreateRequest(BaseModel):
+    tipo: str
+    geracao_id: int | None = None
+    material_id: int | None = None
+    arte_id: int | None = None
+    lead_id: int | None = None
+    conversa_id: int | None = None
+
+
+class AnuncioDesempenhoVariante(BaseModel):
+    variante: str
+    estrategia: str
+    escolhas: int = 0
+    copias: int = 0
+    conversas: int = 0
+    visitas: int = 0
+
+
+class AnuncioDesempenhoCanal(BaseModel):
+    canal: str
+    variantes: list[AnuncioDesempenhoVariante]
+
+
+class AnuncioDesempenhoResponse(BaseModel):
+    total_geracoes: int
+    total_eventos: int
+    canais: list[AnuncioDesempenhoCanal]
+
+
+class ImovelAnuncioCreate(BaseModel):
+    titulo: str | None = None
+    tipo: str = "Apartamento"
+    finalidade: str = "venda"
+    preco: str | None = None
+    preco_numero: float | None = None
+    bairro: str | None = None
+    cidade: str | None = None
+    estado: str | None = None
+    endereco: str | None = None
+    area_imovel: float | None = None
+    quartos: int | None = None
+    suites: int | None = None
+    banheiros: int | None = None
+    vagas: int | None = None
+    caracteristicas: str | None = None
+    descricao: str | None = None
+    titulo_anuncio: str | None = None
+
+
+class ImovelAnuncioUpdate(ImovelAnuncioCreate):
+    pass
+
+
+class ImovelAnuncioResponse(ImovelAnuncioCreate):
+    id: int
+    foto_fachada_url: str | None = None
+    criado_em: datetime
+    atualizado_em: datetime | None = None
+
+    class Config:
+        from_attributes = True
+
+
+class AnaliseFachadaResponse(BaseModel):
+    tipo_sugerido: str | None = None
+    titulo_sugerido: str | None = None
+    descricao_visual: str | None = None
+    diferenciais_visiveis: list[str] = []
+    caracteristicas_sugeridas: str | None = None
+    alertas: list[str] = []
+    gerado_por_ia: bool = False
+    modelo: str = "local"
+
+
+class AnuncioValidarRequest(BaseModel):
+    imovel_anuncio_id: int
+    config: AnuncioGeracaoConfig = AnuncioGeracaoConfig()
+
+
+class AnuncioValidacaoResponse(BaseModel):
+    pode_gerar_textos: bool
+    pode_gerar_artes: bool
+    campos: list[dict]
+    alertas: list[str]
+
+
+class AnuncioGeracaoCreateRequest(BaseModel):
+    imovel_anuncio_id: int
+    config: AnuncioGeracaoConfig = AnuncioGeracaoConfig()
+
+
+class AnuncioMaterialGerado(BaseModel):
+    canal: str
+    variante: str = "principal"
+    titulo: str | None = None
+    corpo: str
+    cta: str | None = None
+    hashtags: str | None = None
+    alertas: list[str] = []
+    conteudo_json: dict | None = None
+
+
+class AnuncioGeracaoIAResponse(BaseModel):
+    publico_alvo: str | None = None
+    alertas_gerais: list[str] = []
+    materiais: list[AnuncioMaterialGerado]
+    gerado_por_ia: bool = False
+    modelo: str = "local"
+    prompt_versao: str = "2.0"
+
+
+class AnuncioMaterialResponse(BaseModel):
+    id: int
+    canal: str
+    variante: str
+    titulo: str | None
+    corpo: str
+    cta: str | None
+    hashtags: str | None
+    alertas: list[str] = []
+    status: str
+    versao: int
+    editado_manualmente: bool
+    criado_em: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class AnuncioArteResponse(BaseModel):
+    id: int
+    formato: str
+    foto_origem_id: int | None
+    url: str | None
+    largura: int | None
+    altura: int | None
+    status: str
+    erro: str | None
+    gerado_por_ia: bool = False
+    criado_em: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class AnuncioGeracaoResponse(BaseModel):
+    id: int
+    imovel_anuncio_id: int | None
+    status: str
+    publico_alvo: str | None
+    alertas: list[str] = []
+    gerado_por_ia: bool
+    modelo_ia: str | None
+    prompt_versao: str | None
+    materiais: list[AnuncioMaterialResponse] = []
+    artes: list[AnuncioArteResponse] = []
+    criado_em: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class AnuncioGeracaoResumoResponse(BaseModel):
+    id: int
+    imovel_anuncio_id: int | None
+    status: str
+    tipo_imovel: str | None = None
+    bairro: str | None = None
+    titulo: str | None = None
+    criado_em: datetime
+
+
+class AnuncioMaterialUpdateRequest(BaseModel):
+    titulo: str | None = None
+    corpo: str | None = None
+    cta: str | None = None
+    hashtags: str | None = None
+
+
+class AnuncioRegenerarMaterialRequest(BaseModel):
+    canal: str
+    variante: str = "principal"
+
+
+class AnuncioRegenerarArteRequest(BaseModel):
+    formato: str
+    foto_id: int | None = None
+
+
 # ---------- Analisador Jurídico ----------
 
 class AchadoRisco(BaseModel):

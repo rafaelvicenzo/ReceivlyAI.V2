@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     gemini_model_pesquisa: str = "gemini-3.5-flash"
     gemini_model_whatsapp: str = "gemini-3.5-flash"
     gemini_model_foto: str = "gemini-3.5-flash"
+    # Artes promocionais de anúncios — precisa suportar IMAGE output (ex.: gemini-2.5-flash-image)
+    gemini_model_anuncio_arte: str = ""
+    gemini_model_foto_fallback: str = ""
 
     fair_use_max_market_searches_per_appraisal: int = 2
     fair_use_max_comparables_per_search: int = 10

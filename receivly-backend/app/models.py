@@ -252,3 +252,115 @@ class FotoTour(Base):
     gerado_por_ia = Column(Integer, default=0)
     prompt_usado = Column(Text, nullable=True)
     criado_em = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+class ImovelAnuncio(Base):
+    __tablename__ = "imoveis_anuncio"
+
+    id = Column(Integer, primary_key=True, index=True)
+    imobiliaria_id = Column(Integer, ForeignKey("imobiliarias.id"), nullable=False)
+    usuario_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False)
+    titulo = Column(String, nullable=True)
+    tipo = Column(String, default="Apartamento")
+    finalidade = Column(String, default="venda")
+    preco = Column(String, nullable=True)
+    preco_numero = Column(Float, nullable=True)
+    bairro = Column(String, nullable=True)
+    cidade = Column(String, nullable=True)
+    estado = Column(String, nullable=True)
+    endereco = Column(String, nullable=True)
+    area_imovel = Column(Float, nullable=True)
+    quartos = Column(Integer, nullable=True)
+    suites = Column(Integer, nullable=True)
+    banheiros = Column(Integer, nullable=True)
+    vagas = Column(Integer, nullable=True)
+    caracteristicas = Column(Text, nullable=True)
+    descricao = Column(Text, nullable=True)
+    titulo_anuncio = Column(String, nullable=True)
+    foto_fachada_caminho = Column(String, nullable=True)
+    foto_fachada_nome = Column(String, nullable=True)
+    analise_fachada_json = Column(Text, nullable=True)
+    criado_em = Column(DateTime, default=datetime.datetime.utcnow)
+    atualizado_em = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+
+class AnuncioGeracao(Base):
+    __tablename__ = "anuncio_geracoes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    imobiliaria_id = Column(Integer, ForeignKey("imobiliarias.id"), nullable=False)
+    usuario_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False)
+    imovel_anuncio_id = Column(Integer, ForeignKey("imoveis_anuncio.id"), nullable=True)
+    avaliacao_id = Column(Integer, ForeignKey("avaliacoes.id"), nullable=True)
+    status = Column(String, default="processando")  # processando | concluido | falha_parcial | falha
+    config_json = Column(Text, nullable=True)
+    alertas_json = Column(Text, nullable=True)
+    publico_alvo = Column(Text, nullable=True)
+    prompt_versao = Column(String, default="1.0")
+    modelo_ia = Column(String, nullable=True)
+    gerado_por_ia = Column(Integer, default=0)
+    criado_em = Column(DateTime, default=datetime.datetime.utcnow)
+    atualizado_em = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+    imovel = relationship("ImovelAnuncio")
+    avaliacao = relationship("Avaliacao")
+    materiais = relationship("AnuncioMaterial", back_populates="geracao", cascade="all, delete-orphan", order_by="AnuncioMaterial.id")
+    artes = relationship("AnuncioArte", back_populates="geracao", cascade="all, delete-orphan", order_by="AnuncioArte.id")
+
+
+class AnuncioMaterial(Base):
+    __tablename__ = "anuncio_materiais"
+
+    id = Column(Integer, primary_key=True, index=True)
+    geracao_id = Column(Integer, ForeignKey("anuncio_geracoes.id"), nullable=False)
+    canal = Column(String, nullable=False)  # portal | instagram | facebook | whatsapp | patrocinado
+    variante = Column(String, default="principal")  # principal | A | B | C
+    titulo = Column(Text, nullable=True)
+    corpo = Column(Text, nullable=False)
+    cta = Column(Text, nullable=True)
+    hashtags = Column(Text, nullable=True)
+    conteudo_json = Column(Text, nullable=True)
+    alertas_json = Column(Text, nullable=True)
+    status = Column(String, default="ok")  # ok | alerta | falha
+    versao = Column(Integer, default=1)
+    editado_manualmente = Column(Integer, default=0)
+    historico_json = Column(Text, nullable=True)
+    criado_em = Column(DateTime, default=datetime.datetime.utcnow)
+    atualizado_em = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+    geracao = relationship("AnuncioGeracao", back_populates="materiais")
+
+
+class AnuncioArte(Base):
+    __tablename__ = "anuncio_artes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    geracao_id = Column(Integer, ForeignKey("anuncio_geracoes.id"), nullable=False)
+    formato = Column(String, nullable=False)  # feed | stories
+    foto_origem_id = Column(Integer, nullable=True)
+    caminho_relativo = Column(String, nullable=True)
+    largura = Column(Integer, nullable=True)
+    altura = Column(Integer, nullable=True)
+    status = Column(String, default="ok")  # ok | falha
+    erro = Column(Text, nullable=True)
+    gerado_por_ia = Column(Integer, default=0)
+    criado_em = Column(DateTime, default=datetime.datetime.utcnow)
+
+    geracao = relationship("AnuncioGeracao", back_populates="artes")
+
+
+class AnuncioEvento(Base):
+    __tablename__ = "anuncio_eventos"
+
+    id = Column(Integer, primary_key=True, index=True)
+    imobiliaria_id = Column(Integer, ForeignKey("imobiliarias.id"), nullable=False)
+    geracao_id = Column(Integer, ForeignKey("anuncio_geracoes.id"), nullable=True)
+    material_id = Column(Integer, ForeignKey("anuncio_materiais.id"), nullable=True)
+    arte_id = Column(Integer, ForeignKey("anuncio_artes.id"), nullable=True)
+    tipo = Column(String, nullable=False)
+    canal = Column(String, nullable=True)
+    variante = Column(String, nullable=True)
+    estrategia = Column(String, nullable=True)
+    lead_id = Column(Integer, ForeignKey("leads.id"), nullable=True)
+    conversa_id = Column(Integer, ForeignKey("conversas.id"), nullable=True)
+    criado_em = Column(DateTime, default=datetime.datetime.utcnow)

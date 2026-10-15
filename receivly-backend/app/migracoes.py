@@ -12,6 +12,69 @@ def _coluna_existe(tabela: str, coluna: str) -> bool:
     return coluna in colunas
 
 
+def _coluna_obrigatoria(tabela: str, coluna: str) -> bool:
+    insp = inspect(engine)
+    for c in insp.get_columns(tabela):
+        if c["name"] == coluna:
+            return c.get("nullable") is False
+    return False
+
+
+def _tornar_avaliacao_id_opcional(conn) -> None:
+    """SQLite não altera NOT NULL; recria a tabela se avaliacao_id ainda for obrigatório."""
+    if not _coluna_existe("anuncio_geracoes", "avaliacao_id"):
+        return
+    if not _coluna_obrigatoria("anuncio_geracoes", "avaliacao_id"):
+        return
+
+    conn.execute(text("PRAGMA foreign_keys=OFF"))
+    conn.execute(
+        text(
+            """
+            CREATE TABLE anuncio_geracoes_new (
+                id INTEGER NOT NULL PRIMARY KEY,
+                imobiliaria_id INTEGER NOT NULL,
+                usuario_id INTEGER NOT NULL,
+                imovel_anuncio_id INTEGER,
+                avaliacao_id INTEGER,
+                status VARCHAR,
+                config_json TEXT,
+                alertas_json TEXT,
+                publico_alvo TEXT,
+                prompt_versao VARCHAR,
+                modelo_ia VARCHAR,
+                gerado_por_ia INTEGER,
+                criado_em DATETIME,
+                atualizado_em DATETIME,
+                FOREIGN KEY(imobiliaria_id) REFERENCES imobiliarias (id),
+                FOREIGN KEY(usuario_id) REFERENCES usuarios (id),
+                FOREIGN KEY(imovel_anuncio_id) REFERENCES imoveis_anuncio (id),
+                FOREIGN KEY(avaliacao_id) REFERENCES avaliacoes (id)
+            )
+            """
+        )
+    )
+    conn.execute(
+        text(
+            """
+            INSERT INTO anuncio_geracoes_new (
+                id, imobiliaria_id, usuario_id, imovel_anuncio_id, avaliacao_id, status,
+                config_json, alertas_json, publico_alvo, prompt_versao, modelo_ia,
+                gerado_por_ia, criado_em, atualizado_em
+            )
+            SELECT
+                id, imobiliaria_id, usuario_id, imovel_anuncio_id, avaliacao_id, status,
+                config_json, alertas_json, publico_alvo, prompt_versao, modelo_ia,
+                gerado_por_ia, criado_em, atualizado_em
+            FROM anuncio_geracoes
+            """
+        )
+    )
+    conn.execute(text("DROP TABLE anuncio_geracoes"))
+    conn.execute(text("ALTER TABLE anuncio_geracoes_new RENAME TO anuncio_geracoes"))
+    conn.execute(text("PRAGMA foreign_keys=ON"))
+
+
 def aplicar_migracoes() -> None:
     if not settings.database_url.startswith("sqlite"):
         return
@@ -72,6 +135,8 @@ def aplicar_migracoes() -> None:
         ("avaliacoes", "respostas_quesitos", "TEXT"),
         ("avaliacoes", "quesitos_arquivo_caminho", "TEXT"),
         ("avaliacoes", "quesitos_arquivo_nome", "TEXT"),
+        ("anuncio_geracoes", "imovel_anuncio_id", "INTEGER"),
+        ("anuncio_artes", "gerado_por_ia", "INTEGER DEFAULT 0"),
     ]
 
     with engine.begin() as conn:
@@ -93,3 +158,5 @@ def aplicar_migracoes() -> None:
                     text("UPDATE usuarios SET perfil = 'admin' WHERE lower(email) = :email"),
                     {"email": email},
                 )
+
+        _tornar_avaliacao_id_opcional(conn)
